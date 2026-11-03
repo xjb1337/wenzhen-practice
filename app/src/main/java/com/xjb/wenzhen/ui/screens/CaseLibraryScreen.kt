@@ -52,6 +52,7 @@ import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
+import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.DifficultyBadge
 import com.xjb.wenzhen.ui.components.EmptyState
@@ -70,8 +71,8 @@ fun CaseLibraryScreen(
     hasApiKey: Boolean,
     builtInCount: Int,
     onDepartmentSelected: (String) -> Unit = {},
-    onCaseSelected: (MedicalCase) -> Unit = {},
-    onGenerateCase: (String, Difficulty) -> Unit = { _, _ -> },
+    onCaseSelected: (MedicalCase, PatientPersonality) -> Unit = { _, _ -> },
+    onGenerateCase: (String, Difficulty, PatientPersonality) -> Unit = { _, _, _ -> },
     onOpenSettings: () -> Unit = {},
     onClearGenerationError: () -> Unit = {},
     isGenerating: Boolean = false,
@@ -81,6 +82,7 @@ fun CaseLibraryScreen(
     modifier: Modifier = Modifier,
 ) {
     var showGenerateDialog by rememberSaveable { mutableStateOf(false) }
+    var personalityCaseId by rememberSaveable { mutableStateOf<String?>(null) }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -175,12 +177,24 @@ fun CaseLibraryScreen(
                     items(cases, key = { it.id }) { medicalCase ->
                         CaseCard(
                             medicalCase = medicalCase,
-                            onClick = { onCaseSelected(medicalCase) },
+                            onClick = { personalityCaseId = medicalCase.id },
                         )
                     }
                 }
             }
         }
+    }
+
+    val personalityCase = cases.firstOrNull { it.id == personalityCaseId }
+    if (personalityCase != null) {
+        PersonalityPickerDialog(
+            medicalCase = personalityCase,
+            onDismiss = { personalityCaseId = null },
+            onConfirm = { personality ->
+                personalityCaseId = null
+                onCaseSelected(personalityCase, personality)
+            },
+        )
     }
 
     if (showGenerateDialog) {
@@ -193,9 +207,9 @@ fun CaseLibraryScreen(
             },
             isGenerating = isGenerating,
             onDismiss = { showGenerateDialog = false },
-            onGenerate = { department, difficulty ->
+            onGenerate = { department, difficulty, personality ->
                 showGenerateDialog = false
-                onGenerateCase(department, difficulty)
+                onGenerateCase(department, difficulty, personality)
             },
             onOpenSettings = {
                 showGenerateDialog = false
@@ -243,7 +257,7 @@ private fun PracticeHero(builtInCount: Int) {
             )
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 HeroStat(value = "$builtInCount", label = "标准病例")
-                HeroStat(value = "8", label = "临床科室")
+                HeroStat(value = "${Departments.all.size - 1}", label = "临床科室")
                 HeroStat(value = "AI", label = "随机扩展")
             }
         }
@@ -466,11 +480,12 @@ private fun GenerateCaseDialog(
     initialDepartment: String,
     isGenerating: Boolean,
     onDismiss: () -> Unit,
-    onGenerate: (String, Difficulty) -> Unit,
+    onGenerate: (String, Difficulty, PatientPersonality) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     var department by rememberSaveable { mutableStateOf(initialDepartment) }
     var difficulty by rememberSaveable { mutableStateOf(Difficulty.MEDIUM) }
+    var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -508,6 +523,10 @@ private fun GenerateCaseDialog(
                         }
                     }
                 }
+                PersonalitySelector(
+                    selected = personality,
+                    onSelected = { personality = it },
+                )
                 if (!hasApiKey) {
                     NoticeBanner(
                         message = "还没有配置 DeepSeek API Key，无法生成病例。",
@@ -532,7 +551,7 @@ private fun GenerateCaseDialog(
             Button(
                 onClick = {
                     if (hasApiKey) {
-                        onGenerate(department, difficulty)
+                        onGenerate(department, difficulty, personality)
                     } else {
                         onOpenSettings()
                     }
@@ -548,4 +567,80 @@ private fun GenerateCaseDialog(
             }
         },
     )
+}
+
+@Composable
+private fun PersonalityPickerDialog(
+    medicalCase: MedicalCase,
+    onDismiss: () -> Unit,
+    onConfirm: (PatientPersonality) -> Unit,
+) {
+    var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("选择患者性格") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Text(
+                    text = "${medicalCase.title} · ${medicalCase.patientSummary}",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                PersonalitySelector(
+                    selected = personality,
+                    onSelected = { personality = it },
+                )
+            }
+        },
+        confirmButton = {
+            Button(onClick = { onConfirm(personality) }) {
+                Text("开始问诊")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
+}
+
+@Composable
+private fun PersonalitySelector(
+    selected: PatientPersonality,
+    onSelected: (PatientPersonality) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("患者性格", style = MaterialTheme.typography.titleSmall)
+        PatientPersonality.entries.chunked(2).forEach { rowItems ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                rowItems.forEach { personality ->
+                    FilterChip(
+                        selected = selected == personality,
+                        onClick = { onSelected(personality) },
+                        label = {
+                            Text(
+                                text = personality.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        modifier = Modifier.weight(1f),
+                        shape = RoundedCornerShape(12.dp),
+                    )
+                }
+                if (rowItems.size == 1) {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+            }
+        }
+        Text(
+            text = selected.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
 }

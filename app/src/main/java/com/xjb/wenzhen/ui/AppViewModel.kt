@@ -1,18 +1,23 @@
 package com.xjb.wenzhen.ui
 
+import android.os.Build
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xjb.wenzhen.AppContainer
+import com.xjb.wenzhen.data.api.ConnectionTestResult
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.ConsultationEntity
 import com.xjb.wenzhen.data.db.ConversationJsonCodec
 import com.xjb.wenzhen.data.model.ChatMessage
+import com.xjb.wenzhen.data.model.ClinicalRequestType
 import com.xjb.wenzhen.data.model.Difficulty
-import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.MedicalCase
+import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.ScoreParser
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -30,7 +35,13 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
     private val initialSettings = runCatching { container.settingsRepository.load() }
         .getOrDefault(AppSettings())
 
-    private val _uiState = MutableStateFlow(AppUiState(settings = initialSettings))
+    private val _uiState = MutableStateFlow(
+        AppUiState(
+            settings = initialSettings,
+            currentVersionName = container.currentVersionName,
+            currentVersionCode = container.currentVersionCode,
+        )
+    )
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
     private val _events = Channel<AppEvent>(Channel.BUFFERED)
@@ -46,7 +57,10 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         _uiState.update { it.copy(selectedDepartment = department) }
     }
 
-    fun openCase(medicalCase: MedicalCase) {
+    fun openCase(
+        medicalCase: MedicalCase,
+        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+    ) {
         val openingMessage = ChatMessage(
             role = MessageRole.PATIENT,
             content = medicalCase.openingLine,
@@ -54,8 +68,11 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         _uiState.update {
             it.copy(
                 activeCase = medicalCase,
+                patientPersonality = personality,
+                consultationStartedAt = System.currentTimeMillis(),
                 messages = listOf(openingMessage),
                 isPatientTyping = false,
+                isQueryingClinical = false,
                 chatError = null,
                 finishError = null,
                 currentResult = null,
@@ -68,7 +85,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         val content = text.trim()
         if (content.isEmpty()) return
         val state = _uiState.value
-        if (state.isPatientTyping) return
+        if (state.isPatientTyping || state.isQueryingClinical) return
         val medicalCase = state.activeCase ?: return
 
         if (!state.hasApiKey) {
@@ -77,7 +94,11 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             return
         }
 
-        val doctorMessage = ChatMessage(role = MessageRole.DOCTOR, content = content)
+        val doctorMessage = ChatMessage(
+            role = MessageRole.DOCTOR,
+            content = content,
+            deliveryState = MessageDeliveryState.SENDING,
+        )
         val conversation = state.messages + doctorMessage
         _uiState.update {
             it.copy(
@@ -86,27 +107,232 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                 chatError = null,
             )
         }
+        requestPatientReply(
+            medicalCase = medicalCase,
+            config = state.settings.toLlmConfig(),
+            personality = state.patientPersonality,
+            conversation = conversation,
+            doctorIndex = conversation.lastIndex,
+        )
+    }
 
+    fun retryFailedMessage() {
+        val state = _uiState.value
+        if (state.isPatientTyping || state.isQueryingClinical) return
+        val medicalCase = state.activeCase ?: return
+        val failedIndex = state.messages.indexOfLast {
+            it.role == MessageRole.DOCTOR && it.deliveryState == MessageDeliveryState.FAILED
+        }
+        if (failedIndex < 0) return
+        if (!state.hasApiKey) {
+            _uiState.update { it.copy(chatError = "请先在设置中填写 DeepSeek API Key。") }
+            viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
+            return
+        }
+
+        val conversation = state.messages.take(failedIndex + 1).toMutableList()
+        conversation[failedIndex] = conversation[failedIndex].copy(
+            deliveryState = MessageDeliveryState.SENDING,
+        )
+        _uiState.update {
+            it.copy(
+                messages = conversation,
+                isPatientTyping = true,
+                chatError = null,
+            )
+        }
+        requestPatientReply(
+            medicalCase = medicalCase,
+            config = state.settings.toLlmConfig(),
+            personality = state.patientPersonality,
+            conversation = conversation,
+            doctorIndex = failedIndex,
+        )
+    }
+
+    private fun requestPatientReply(
+        medicalCase: MedicalCase,
+        config: com.xjb.wenzhen.data.model.LlmConfig,
+        personality: PatientPersonality,
+        conversation: List<ChatMessage>,
+        doctorIndex: Int,
+    ) {
         viewModelScope.launch {
             try {
-                val reply = container.patientChatService.reply(
-                    config = state.settings.toLlmConfig(),
+                val reply = container.patientChatService.replyStreaming(
+                    config = config,
                     medicalCase = medicalCase,
                     messages = conversation,
+                    personality = personality,
+                    onDelta = { delta ->
+                        if (delta.isNotEmpty()) {
+                            _uiState.update { latest ->
+                                applyPatientDelta(
+                                    latest = latest,
+                                    caseId = medicalCase.id,
+                                    doctorIndex = doctorIndex,
+                                    delta = delta,
+                                )
+                            }
+                        }
+                    },
                 )
                 if (reply.isBlank()) {
                     throw IllegalStateException("患者没有返回内容，请重新询问。")
                 }
                 _uiState.update { latest ->
+                    finishPatientReply(
+                        latest = latest,
+                        caseId = medicalCase.id,
+                        doctorIndex = doctorIndex,
+                        reply = reply,
+                    )
+                }
+            } catch (error: Exception) {
+                _uiState.update { latest ->
+                    failPatientReply(
+                        latest = latest,
+                        caseId = medicalCase.id,
+                        doctorIndex = doctorIndex,
+                        message = friendlyMessage(error, "发送失败，请检查网络后重试。"),
+                    )
+                }
+            }
+        }
+    }
+
+    private fun applyPatientDelta(
+        latest: AppUiState,
+        caseId: String,
+        doctorIndex: Int,
+        delta: String,
+    ): AppUiState {
+        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        if (latest.messages.getOrNull(doctorIndex)?.deliveryState != MessageDeliveryState.SENDING) {
+            return latest
+        }
+        val updated = latest.messages.toMutableList()
+        val patientIndex = doctorIndex + 1
+        val existing = updated.getOrNull(patientIndex)
+        if (existing?.role == MessageRole.PATIENT &&
+            existing.deliveryState == MessageDeliveryState.SENDING
+        ) {
+            updated[patientIndex] = existing.copy(content = existing.content + delta)
+        } else {
+            val draft = ChatMessage(
+                role = MessageRole.PATIENT,
+                content = delta,
+                deliveryState = MessageDeliveryState.SENDING,
+            )
+            if (patientIndex <= updated.size) {
+                updated.add(patientIndex, draft)
+            } else {
+                updated.add(draft)
+            }
+        }
+        return latest.copy(messages = updated, isPatientTyping = true)
+    }
+
+    private fun finishPatientReply(
+        latest: AppUiState,
+        caseId: String,
+        doctorIndex: Int,
+        reply: String,
+    ): AppUiState {
+        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        val updated = latest.messages.toMutableList()
+        updated.getOrNull(doctorIndex)?.let { doctor ->
+            updated[doctorIndex] = doctor.copy(deliveryState = MessageDeliveryState.SENT)
+        }
+        val patientIndex = doctorIndex + 1
+        val existing = updated.getOrNull(patientIndex)
+        if (existing?.role == MessageRole.PATIENT) {
+            updated[patientIndex] = existing.copy(
+                content = reply,
+                deliveryState = MessageDeliveryState.SENT,
+            )
+        } else {
+            val patient = ChatMessage(
+                role = MessageRole.PATIENT,
+                content = reply,
+                deliveryState = MessageDeliveryState.SENT,
+            )
+            if (patientIndex <= updated.size) {
+                updated.add(patientIndex, patient)
+            } else {
+                updated.add(patient)
+            }
+        }
+        return latest.copy(
+            messages = updated,
+            isPatientTyping = false,
+            chatError = null,
+        )
+    }
+
+    private fun failPatientReply(
+        latest: AppUiState,
+        caseId: String,
+        doctorIndex: Int,
+        message: String,
+    ): AppUiState {
+        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        val updated = latest.messages.toMutableList()
+        updated.getOrNull(doctorIndex)?.let { doctor ->
+            updated[doctorIndex] = doctor.copy(deliveryState = MessageDeliveryState.FAILED)
+        }
+        val patientIndex = doctorIndex + 1
+        val draft = updated.getOrNull(patientIndex)
+        if (draft?.role == MessageRole.PATIENT &&
+            draft.deliveryState == MessageDeliveryState.SENDING
+        ) {
+            updated.removeAt(patientIndex)
+        }
+        return latest.copy(
+            messages = updated,
+            isPatientTyping = false,
+            chatError = message,
+        )
+    }
+
+    fun clearChatError() {
+        _uiState.update { it.copy(chatError = null) }
+    }
+
+    fun requestClinical(requestType: ClinicalRequestType, item: String) {
+        val normalizedItem = item.trim()
+        if (normalizedItem.isEmpty()) return
+        val state = _uiState.value
+        if (state.isPatientTyping || state.isQueryingClinical) return
+        val medicalCase = state.activeCase ?: return
+        if (!state.hasApiKey) {
+            _uiState.update {
+                it.copy(chatError = "请先在设置中填写 DeepSeek API Key，再索取检查结果。")
+            }
+            viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
+            return
+        }
+
+        _uiState.update { it.copy(isQueryingClinical = true, chatError = null) }
+        viewModelScope.launch {
+            try {
+                val result = container.clinicalDataService.request(
+                    config = state.settings.toLlmConfig(),
+                    medicalCase = medicalCase,
+                    requestType = requestType,
+                    item = normalizedItem,
+                )
+                _uiState.update { latest ->
                     if (latest.activeCase?.id != medicalCase.id) {
-                        latest.copy(isPatientTyping = false)
+                        latest.copy(isQueryingClinical = false)
                     } else {
                         latest.copy(
                             messages = latest.messages + ChatMessage(
-                                role = MessageRole.PATIENT,
-                                content = reply,
+                                role = MessageRole.SYSTEM,
+                                content = result,
+                                systemTitle = "${requestType.label} · $normalizedItem",
                             ),
-                            isPatientTyping = false,
+                            isQueryingClinical = false,
                             chatError = null,
                         )
                     }
@@ -114,19 +340,19 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
-                        isPatientTyping = false,
-                        chatError = friendlyMessage(error, "发送失败，请检查网络后重试。"),
+                        isQueryingClinical = false,
+                        chatError = friendlyMessage(error, "${requestType.label}结果获取失败，请稍后重试。"),
                     )
                 }
             }
         }
     }
 
-    fun clearChatError() {
-        _uiState.update { it.copy(chatError = null) }
-    }
-
-    fun generateCase(department: String, difficulty: Difficulty) {
+    fun generateCase(
+        department: String,
+        difficulty: Difficulty,
+        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+    ) {
         val state = _uiState.value
         if (state.isGeneratingCase) return
         if (!state.hasApiKey) {
@@ -154,7 +380,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                         generationError = null,
                     )
                 }
-                openCase(generated)
+                openCase(generated, personality)
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -230,6 +456,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     initialDiagnosis = diagnosis,
                     diagnosisBasis = diagnosisBasis.trim(),
                     createdAt = createdAt,
+                    patientPersonality = state.patientPersonality.name,
                 )
                 val recordId = container.consultationRepository.save(entity)
                 val result = ResultViewData(
@@ -298,6 +525,140 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
 
     fun clearSettingsSaveError() {
         _uiState.update { it.copy(settingsSaveError = null) }
+    }
+
+    fun testConnection(apiKey: String, model: String, baseUrl: String) {
+        if (_uiState.value.connectionTest.isTesting) return
+        val key = apiKey.trim()
+        if (key.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    connectionTest = ConnectionTestUiState(
+                        message = "请先填写 DeepSeek API Key。",
+                        isSuccess = false,
+                    )
+                )
+            }
+            return
+        }
+        val normalizedUrl = baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL }
+        if (!normalizedUrl.startsWith("https://") && !normalizedUrl.startsWith("http://")) {
+            _uiState.update {
+                it.copy(
+                    connectionTest = ConnectionTestUiState(
+                        message = "Base URL 必须以 http:// 或 https:// 开头。",
+                        isSuccess = false,
+                    )
+                )
+            }
+            return
+        }
+        val config = AppSettings(
+            apiKey = key,
+            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
+            baseUrl = normalizedUrl.trimEnd('/'),
+        ).toLlmConfig()
+        _uiState.update { it.copy(connectionTest = ConnectionTestUiState(isTesting = true)) }
+        viewModelScope.launch {
+            val result = container.llmClient.testConnection(config)
+            _uiState.update {
+                it.copy(
+                    connectionTest = when (result) {
+                        ConnectionTestResult.Success -> ConnectionTestUiState(
+                            message = "连接成功，API Key 可用。",
+                            isSuccess = true,
+                        )
+                        is ConnectionTestResult.Failure -> ConnectionTestUiState(
+                            message = result.message,
+                            isSuccess = false,
+                        )
+                    }
+                )
+            }
+        }
+    }
+
+    fun checkForUpdate() {
+        val updateState = _uiState.value.updateState
+        if (updateState is UpdateUiState.Checking || updateState is UpdateUiState.Downloading) return
+        _uiState.update { it.copy(updateState = UpdateUiState.Checking) }
+        viewModelScope.launch {
+            try {
+                when (val result = container.updateChecker.checkForUpdate(
+                    currentVersionCode = container.currentVersionCode,
+                    currentVersionName = container.currentVersionName,
+                )) {
+                    UpdateCheckResult.UpToDate -> _uiState.update {
+                        it.copy(updateState = UpdateUiState.UpToDate)
+                    }
+                    is UpdateCheckResult.Available -> {
+                        if (result.update.minSdk > Build.VERSION.SDK_INT) {
+                            _uiState.update {
+                                it.copy(
+                                    updateState = UpdateUiState.Failed(
+                                        "新版本要求更高的 Android 系统版本，请通过应用商店或发布页更新。",
+                                    )
+                                )
+                            }
+                        } else {
+                            _uiState.update {
+                                it.copy(updateState = UpdateUiState.Available(result.update))
+                            }
+                        }
+                    }
+                }
+            } catch (error: Exception) {
+                _uiState.update {
+                    it.copy(
+                        updateState = UpdateUiState.Failed(
+                            friendlyMessage(error, "检查更新失败，请稍后重试。"),
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun downloadUpdate() {
+        val state = _uiState.value
+        if (state.updateState is UpdateUiState.Downloading) return
+        val update = when (val current = state.updateState) {
+            is UpdateUiState.Available -> current.update
+            is UpdateUiState.Failed -> current.update
+            else -> null
+        } ?: return
+        _uiState.update { it.copy(updateState = UpdateUiState.Downloading(update, 0)) }
+        viewModelScope.launch {
+            try {
+                val file = container.updateChecker.downloadApk(update) { progress ->
+                    _uiState.update { latest ->
+                        val downloading = latest.updateState as? UpdateUiState.Downloading
+                        if (downloading?.update?.versionCode == update.versionCode) {
+                            latest.copy(updateState = UpdateUiState.Downloading(update, progress))
+                        } else {
+                            latest
+                        }
+                    }
+                }
+                _uiState.update {
+                    it.copy(updateState = UpdateUiState.Downloaded(update, file))
+                }
+            } catch (error: Exception) {
+                _uiState.update {
+                    it.copy(
+                        updateState = UpdateUiState.Failed(
+                            message = friendlyMessage(error, "更新下载失败，请稍后重试。"),
+                            update = update,
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun dismissUpdateDialog() {
+        if (_uiState.value.updateState is UpdateUiState.Downloading) return
+        _uiState.update { it.copy(updateState = UpdateUiState.Idle) }
     }
 
     fun loadHistoryDetail(id: Long) {
