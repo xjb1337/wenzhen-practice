@@ -1,0 +1,211 @@
+package com.xjb.wenzhen.ui
+
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onRoot
+import com.github.takahirom.roborazzi.captureRoboImage
+import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.model.ChatMessage
+import com.xjb.wenzhen.data.model.Departments
+import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.ui.screens.CaseLibraryScreen
+import com.xjb.wenzhen.ui.screens.ChatScreen
+import com.xjb.wenzhen.ui.screens.FinishConsultationScreen
+import com.xjb.wenzhen.ui.screens.HistoryScreen
+import com.xjb.wenzhen.ui.screens.ResultScreen
+import com.xjb.wenzhen.ui.screens.ResultTab
+import com.xjb.wenzhen.ui.screens.SettingsScreen
+import com.xjb.wenzhen.ui.theme.WenzhenTheme
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.annotation.GraphicsMode
+import java.io.File
+
+@RunWith(RobolectricTestRunner::class)
+@GraphicsMode(GraphicsMode.Mode.NATIVE)
+@Config(sdk = [34], qualifiers = "w411dp-h891dp-xxhdpi")
+class ScreenshotTest {
+    @get:Rule
+    val composeRule = createComposeRule()
+
+    private val medicalCase = BuiltInCases.byId("cardio-chest-pain")!!
+    private val score = ScoreResult(
+        totalScore = 85,
+        coverageScore = 34,
+        techniqueScore = 17,
+        communicationScore = 18,
+        diagnosisScore = 16,
+        coveredPoints = listOf("询问了胸痛起病时间和诱因", "询问了疼痛性质和放射部位", "询问了伴随症状"),
+        missedQuestions = listOf("未系统询问饮酒史", "未询问既往用药依从性"),
+        strengths = listOf("问诊语言自然，能及时追问", "重点围绕胸痛展开，条理清楚"),
+        improvements = listOf("补充心血管危险因素和家族史", "确认药物过敏史后再讨论处理"),
+        correctDiagnosis = "急性ST段抬高型心肌梗死（前壁）",
+        diagnosisExplanation = "压榨性胸痛持续不缓解并伴大汗、左肩放射，是本例最重要的线索；结合ST段抬高可支持诊断。",
+    )
+
+    @Before
+    fun setUp() {
+        System.setProperty("roborazzi.test.record", "true")
+        File("build/outputs/roborazzi").mkdirs()
+    }
+
+    @Test
+    fun caseLibraryScreenshot() {
+        setScreen {
+            CaseLibraryScreen(
+                cases = BuiltInCases.all,
+                selectedDepartment = Departments.ALL,
+                hasApiKey = true,
+                builtInCount = BuiltInCases.all.size,
+            )
+        }
+        capture("case_library.png")
+    }
+
+    @Test
+    fun emptyHistoryScreenshot() {
+        setScreen {
+            HistoryScreen(
+                records = emptyList(),
+                isLoading = false,
+                errorMessage = null,
+            )
+        }
+        capture("history_empty.png")
+    }
+
+    @Test
+    fun chatScreenshot() {
+        val messages = listOf(
+            ChatMessage(MessageRole.PATIENT, medicalCase.openingLine, 1_700_000_000_000),
+            ChatMessage(MessageRole.DOCTOR, "您胸痛多久了？是突然开始的吗？", 1_700_000_010_000),
+            ChatMessage(MessageRole.PATIENT, "大概三个小时了，搬东西时突然开始的，一直没缓过来。", 1_700_000_020_000),
+            ChatMessage(MessageRole.DOCTOR, "疼痛会向左肩或者后背放射吗？有没有出汗？", 1_700_000_030_000),
+            ChatMessage(MessageRole.PATIENT, "左肩有点酸，出了很多汗，人也有点恶心。", 1_700_000_040_000),
+        )
+        setScreen {
+            ChatScreen(
+                medicalCase = medicalCase,
+                messages = messages,
+                isPatientTyping = false,
+                hasApiKey = true,
+                errorMessage = null,
+                onSendMessage = {},
+                onFinish = {},
+                onBack = {},
+                onOpenSettings = {},
+                onDismissError = {},
+            )
+        }
+        capture("chat.png")
+    }
+
+    @Test
+    fun settingsScreenshot() {
+        setScreen {
+            SettingsScreen(
+                settings = AppSettings(
+                    apiKey = "sk-demo-only-for-masked-display",
+                    model = AppSettings.MODEL_PRO,
+                    baseUrl = AppSettings.DEFAULT_BASE_URL,
+                ),
+                onSave = { _, _, _ -> },
+                onBack = {},
+            )
+        }
+        capture("settings.png")
+    }
+
+    @Test
+    fun finishConsultationScreenshot() {
+        setScreen {
+            FinishConsultationScreen(
+                caseTitle = medicalCase.title,
+                patientName = medicalCase.patient.name,
+                department = medicalCase.department,
+                onBack = {},
+                onSubmit = { _, _ -> },
+                initialDiagnosis = "急性冠脉综合征",
+                initialDiagnosisBasis = "持续胸痛伴大汗，向左肩放射，有高血压和吸烟史。",
+            )
+        }
+        capture("finish_consultation.png")
+    }
+
+    @Test
+    fun resultRecordScreenshot() {
+        setScreen {
+            SampleResultScreen(initialTab = ResultTab.RECORD)
+        }
+        capture("result_record.png")
+    }
+
+    @Test
+    fun resultReviewScreenshot() {
+        setScreen {
+            SampleResultScreen(initialTab = ResultTab.REVIEW)
+        }
+        capture("result_review.png")
+    }
+
+    @Composable
+    private fun SampleResultScreen(initialTab: ResultTab) {
+        ResultScreen(
+            caseTitle = medicalCase.title,
+            patientName = medicalCase.patient.name,
+            department = medicalCase.department,
+            difficulty = medicalCase.difficulty.label,
+            createdAt = 1_700_000_100_000,
+            medicalRecord = sampleRecord(),
+            score = score,
+            initialDiagnosis = "急性心肌梗死",
+            onBack = {},
+            initialTab = initialTab,
+        )
+    }
+
+    private fun setScreen(content: @Composable () -> Unit) {
+        composeRule.setContent {
+            WenzhenTheme(darkTheme = false) {
+                content()
+            }
+        }
+        composeRule.waitForIdle()
+    }
+
+    private fun capture(fileName: String) {
+        composeRule.waitForIdle()
+        composeRule.onRoot().captureRoboImage(
+            filePath = "build/outputs/roborazzi/$fileName",
+        )
+    }
+
+    private fun sampleRecord(): String = """
+        一般情况
+        王建国，男，58岁，退休工人，由家属陪同就诊。
+        主诉
+        胸骨后压榨样疼痛3小时，伴大汗。
+        现病史
+        患者3小时前搬重物时突发胸骨后压榨样疼痛，向左肩放射，持续不缓解，伴大汗、恶心。自服硝酸甘油后无明显缓解。
+        既往史
+        高血压8年，服药不规律。否认糖尿病和既往心肌梗死病史。
+        个人史
+        吸烟30年，每日约20支，偶饮酒。
+        婚育史
+        已婚，育有一子，配偶及儿子体健。
+        家族史
+        父亲曾因心肌梗死去世，母亲有高血压。
+        体格检查
+        T 36.8℃，P 96次/分，BP 150/92mmHg。神志清楚，大汗，心音稍低，律齐，双肺呼吸音清，双下肢无水肿。
+        系统回顾
+        无发热、咳嗽，无腹痛、黑便，无尿路刺激症状。
+        初步诊断
+        急性ST段抬高型心肌梗死（前壁）
+    """.trimIndent()
+}
