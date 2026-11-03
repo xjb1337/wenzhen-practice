@@ -45,4 +45,10 @@ class SseParserTest {
     fun `损坏 JSON 不中断流解析`() {
         assertSame(SseEvent.Ignore, SseParser.parseLine("data: {not-json"))
     }
+
+    @org.junit.Test
+    fun errorPayloadBecomesErrorEvent() {
+        val event = SseParser.parseLine("data: {\"error\":{\"message\":\"quota\"}}")
+        org.junit.Assert.assertEquals(SseEvent.Error("quota"), event)
+    }
 }

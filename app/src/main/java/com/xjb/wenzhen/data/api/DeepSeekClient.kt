@@ -76,6 +76,7 @@ class DeepSeekClient(
                         }
                         SseEvent.Done -> finished = true
                         SseEvent.Ignore -> Unit
+                        is SseEvent.Error -> throw LlmException("AI 服务返回错误：${event.message}")
                     }
                 }
                 val result = answer.toString().trim()
@@ -108,7 +109,11 @@ class DeepSeekClient(
                     put("content", "ping")
                 }))
             }
-            val request = request(config, payload, accept = "application/json")
+            val request = try {
+                request(config, payload, accept = "application/json")
+            } catch (error: LlmException) {
+                return@withContext ConnectionTestResult.Failure(error.message ?: "接口地址无效。")
+            }
             try {
                 httpClient.newCall(request).execute().use { response ->
                     val body = response.body?.string().orEmpty()
@@ -203,6 +208,9 @@ class DeepSeekClient(
 
     private fun completionUrl(baseUrl: String): String {
         val base = baseUrl.trim().ifBlank { "https://api.deepseek.com" }.trimEnd('/')
+        if (!base.startsWith("https://", ignoreCase = true)) {
+            throw LlmException("接口地址必须以 https:// 开头，以免 API Key 明文传输。")
+        }
         return if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
     }
 

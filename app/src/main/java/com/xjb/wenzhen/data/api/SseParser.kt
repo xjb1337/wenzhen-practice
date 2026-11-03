@@ -6,6 +6,7 @@ sealed interface SseEvent {
     data class Delta(val text: String) : SseEvent
     data object Done : SseEvent
     data object Ignore : SseEvent
+    data class Error(val message: String) : SseEvent
 }
 
 object SseParser {
@@ -19,6 +20,9 @@ object SseParser {
         if (payload == "[DONE]") return SseEvent.Done
 
         val json = runCatching { JSONObject(payload) }.getOrNull() ?: return SseEvent.Ignore
+        json.optJSONObject("error")?.let { error ->
+            return SseEvent.Error(error.optString("message").ifBlank { "AI 服务返回错误" })
+        }
         val content = json.optJSONArray("choices")
             ?.optJSONObject(0)
             ?.optJSONObject("delta")

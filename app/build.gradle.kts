@@ -21,6 +21,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
+        buildConfigField("String", "RELEASE_CERT_SHA256", "\"2dc6d7ff67978232fc068c0e0c09266aaf0d473668457e3c5ebd3de5103a3e17\"")
     }
 
     signingConfigs {
@@ -58,6 +59,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     composeOptions {

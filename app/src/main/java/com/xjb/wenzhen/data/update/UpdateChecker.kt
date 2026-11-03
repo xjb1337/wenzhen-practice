@@ -1,6 +1,7 @@
 package com.xjb.wenzhen.data.update
 
 import android.content.Context
+import com.xjb.wenzhen.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -114,6 +115,11 @@ class UpdateChecker(
                 !installedCertificate.equals(update.signingCertSha256, ignoreCase = true)
             ) {
                 throw UpdateParseException("更新包签名与本机版本不一致，已停止安装。")
+            }
+            if (!BuildConfig.DEBUG &&
+                !archiveCertificate.equals(BuildConfig.RELEASE_CERT_SHA256, ignoreCase = true)
+            ) {
+                throw UpdateParseException("更新包签名不是官方发布证书，已停止安装。")
             }
             if (!partial.renameTo(target)) {
                 partial.copyTo(target, overwrite = true)

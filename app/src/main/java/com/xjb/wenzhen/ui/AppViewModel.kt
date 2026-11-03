@@ -188,6 +188,8 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                         reply = reply,
                     )
                 }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update { latest ->
                     failPatientReply(
