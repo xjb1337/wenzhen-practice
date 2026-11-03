@@ -6,7 +6,7 @@ import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.PatientInfo
 
 object BuiltInCases {
-    val all: List<MedicalCase> = listOf(
+    private val coreCases: List<MedicalCase> = listOf(
         MedicalCase(
             id = "cardio-chest-pain",
             title = "胸痛三小时",
@@ -338,6 +338,8 @@ object BuiltInCases {
             differentialDiagnoses = listOf("急性支气管炎", "心源性哮喘", "异物吸入", "慢性阻塞性肺疾病"),
         ),
     )
+
+    val all: List<MedicalCase> = coreCases + ExtendedBuiltInCases.all
 
     fun byId(id: String): MedicalCase? = all.firstOrNull { it.id == id }
 }

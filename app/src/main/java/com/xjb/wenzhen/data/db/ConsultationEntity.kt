@@ -2,6 +2,7 @@ package com.xjb.wenzhen.data.db
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 
 @Entity(tableName = "consultations")
 data class ConsultationEntity(
@@ -19,4 +20,6 @@ data class ConsultationEntity(
     val initialDiagnosis: String,
     val diagnosisBasis: String,
     val createdAt: Long,
+    @ColumnInfo(defaultValue = "'COOPERATIVE'")
+    val patientPersonality: String = "COOPERATIVE",
 )

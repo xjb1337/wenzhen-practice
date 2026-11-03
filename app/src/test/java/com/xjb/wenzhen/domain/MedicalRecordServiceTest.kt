@@ -13,6 +13,32 @@ import org.junit.Test
 
 class MedicalRecordServiceTest {
     @Test
+    fun `FakeLlmClient同步实现流式回调并返回完整回复`() = runTest {
+        val fakeClient = FakeLlmClient(
+            response = "我觉得好一些了。",
+            streamedChunks = listOf("我觉得", "好一些了。"),
+        )
+        val service = PatientChatService(fakeClient, PromptBuilder())
+        val medicalCase = BuiltInCases.byId("cardio-chest-pain")!!
+        val deltas = mutableListOf<String>()
+
+        val reply = service.replyStreaming(
+            config = LlmConfig("test-key", "deepseek-v4-flash", "https://api.deepseek.com"),
+            medicalCase = medicalCase,
+            messages = listOf(
+                ChatMessage(MessageRole.PATIENT, medicalCase.openingLine),
+                ChatMessage(MessageRole.DOCTOR, "现在感觉怎么样？"),
+            ),
+            onDelta = { deltas += it },
+        )
+
+        assertEquals("我觉得好一些了。", reply)
+        assertEquals(listOf("我觉得", "好一些了。"), deltas)
+        assertEquals(3, fakeClient.lastMessages.size)
+        assertTrue(fakeClient.lastMessages.first().content.contains("标准化病人"))
+    }
+
+    @Test
     fun `FakeLlmClient生成病历后系统回顾位于体格检查之后`() = runTest {
         val fakeResponse = """
             ## 一般情况
@@ -58,6 +84,7 @@ class MedicalRecordServiceTest {
 
     private class FakeLlmClient(
         private val response: String,
+        private val streamedChunks: List<String> = listOf(response),
     ) : LlmClient {
         var lastMessages: List<LlmMessage> = emptyList()
             private set
@@ -70,6 +97,17 @@ class MedicalRecordServiceTest {
         ): String {
             lastMessages = messages
             return response
+        }
+
+        override suspend fun stream(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            temperature: Double,
+            onDelta: suspend (String) -> Unit,
+        ): String {
+            lastMessages = messages
+            streamedChunks.forEach { chunk -> onDelta(chunk) }
+            return streamedChunks.joinToString(separator = "")
         }
     }
 }

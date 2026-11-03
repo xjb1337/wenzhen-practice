@@ -1,6 +1,7 @@
 package com.xjb.wenzhen.ui
 
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
@@ -9,7 +10,10 @@ import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.domain.StatsCalculator
+import com.xjb.wenzhen.domain.StatsRecord
 import com.xjb.wenzhen.ui.screens.CaseLibraryScreen
 import com.xjb.wenzhen.ui.screens.ChatScreen
 import com.xjb.wenzhen.ui.screens.FinishConsultationScreen
@@ -17,6 +21,8 @@ import com.xjb.wenzhen.ui.screens.HistoryScreen
 import com.xjb.wenzhen.ui.screens.ResultScreen
 import com.xjb.wenzhen.ui.screens.ResultTab
 import com.xjb.wenzhen.ui.screens.SettingsScreen
+import com.xjb.wenzhen.ui.screens.StatsScreen
+import com.xjb.wenzhen.ui.screens.UpdateDialog
 import com.xjb.wenzhen.ui.theme.WenzhenTheme
 import org.junit.Before
 import org.junit.Rule
@@ -107,6 +113,66 @@ class ScreenshotTest {
     }
 
     @Test
+    fun chatCoverageHintScreenshot() {
+        val startedAt = System.currentTimeMillis() - 125_000L
+        val messages = listOf(
+            ChatMessage(MessageRole.PATIENT, medicalCase.openingLine, 1_700_000_000_000),
+            ChatMessage(MessageRole.DOCTOR, "您胸痛多久了？有没有放射痛、出汗或恶心？", 1_700_000_010_000),
+            ChatMessage(MessageRole.PATIENT, "大概三个小时了，左肩有点酸，出了很多汗，也有点恶心。", 1_700_000_020_000),
+        )
+        setScreen {
+            ChatScreen(
+                medicalCase = medicalCase,
+                messages = messages,
+                isPatientTyping = false,
+                hasApiKey = true,
+                errorMessage = null,
+                onSendMessage = {},
+                onFinish = {},
+                onBack = {},
+                onOpenSettings = {},
+                onDismissError = {},
+                startedAtMillis = startedAt,
+                coverageInitiallyExpanded = true,
+            )
+        }
+        capture("chat_coverage_hint.png")
+    }
+
+    @Test
+    fun chatClinicalResultScreenshot() {
+        val startedAt = System.currentTimeMillis() - 65_000L
+        val messages = listOf(
+            ChatMessage(MessageRole.PATIENT, medicalCase.openingLine, 1_700_000_000_000),
+            ChatMessage(MessageRole.DOCTOR, "我先给您做一下心肺听诊。", 1_700_000_010_000),
+            ChatMessage(
+                role = MessageRole.SYSTEM,
+                content = "T 36.8℃，P 96次/分，BP 150/92mmHg。双肺呼吸音清，未闻及干湿啰音；心率96次/分，律齐，心音稍低，未闻及明显杂音。",
+                timestamp = 1_700_000_020_000,
+                systemTitle = "查体 · 心肺听诊",
+            ),
+            ChatMessage(MessageRole.PATIENT, "听诊的时候没什么特别感觉，就是胸口还是闷。", 1_700_000_030_000),
+        )
+        setScreen {
+            ChatScreen(
+                medicalCase = medicalCase,
+                messages = messages,
+                isPatientTyping = false,
+                hasApiKey = true,
+                errorMessage = null,
+                onSendMessage = {},
+                onFinish = {},
+                onBack = {},
+                onOpenSettings = {},
+                onDismissError = {},
+                startedAtMillis = startedAt,
+                coverageInitiallyExpanded = true,
+            )
+        }
+        capture("chat_clinical_result.png")
+    }
+
+    @Test
     fun settingsScreenshot() {
         setScreen {
             SettingsScreen(
@@ -120,6 +186,74 @@ class ScreenshotTest {
             )
         }
         capture("settings.png")
+    }
+
+    @Test
+    fun settingsGuideScreenshot() {
+        setScreen {
+            SettingsScreen(
+                settings = AppSettings(),
+                onSave = { _, _, _ -> },
+                onBack = {},
+                initialGuideExpanded = true,
+            )
+        }
+        capture("settings_key_guide.png")
+    }
+
+    @Test
+    fun settingsConnectionSuccessScreenshot() {
+        setScreen {
+            SettingsScreen(
+                settings = AppSettings(
+                    apiKey = "sk-demo-only-for-connection-test",
+                    model = AppSettings.MODEL_FLASH,
+                    baseUrl = AppSettings.DEFAULT_BASE_URL,
+                ),
+                onSave = { _, _, _ -> },
+                onBack = {},
+                connectionTest = ConnectionTestUiState(
+                    message = "连接成功，API Key 可用。",
+                    isSuccess = true,
+                ),
+            )
+        }
+        capture("settings_connection_success.png")
+    }
+
+    @Test
+    fun statsScreenshot() {
+        val stats = StatsCalculator.calculate(
+            listOf(
+                StatsRecord(1, "心内科", 72, 1_700_000_000_000, listOf("未询问家族史", "未询问吸烟史")),
+                StatsRecord(2, "呼吸内科", 81, 1_700_100_000_000, listOf("未询问职业暴露")),
+                StatsRecord(3, "心内科", 86, 1_700_200_000_000, listOf("未询问家族史")),
+                StatsRecord(4, "消化内科", 91, 1_700_300_000_000, listOf("未询问饮酒史")),
+            )
+        )
+        setScreen { StatsScreen(stats = stats) }
+        capture("stats.png")
+    }
+
+    @Test
+    fun updateDialogScreenshot() {
+        setScreen {
+            UpdateDialog(
+                update = UpdateInfo(
+                    versionName = "1.2.0",
+                    versionCode = 12,
+                    apkUrl = "https://github.com/xjb1337/wenzhen-practice/releases/download/v1.2.0/wenzhen-practice.apk",
+                    sha256 = "a".repeat(64),
+                    signingCertSha256 = "b".repeat(64),
+                    notes = "新增成绩趋势与常遗漏问诊要点统计；优化问诊提示、查体结果和设置页体验。",
+                    minSdk = 26,
+                ),
+                onDownload = {},
+                onInstall = {},
+                onDismiss = {},
+            )
+        }
+        captureDialog("update_dialog.png")
     }
 
     @Test
@@ -182,6 +316,13 @@ class ScreenshotTest {
     private fun capture(fileName: String) {
         composeRule.waitForIdle()
         composeRule.onRoot().captureRoboImage(
+            filePath = "build/outputs/roborazzi/$fileName",
+        )
+    }
+
+    private fun captureDialog(fileName: String) {
+        composeRule.waitForIdle()
+        composeRule.onNode(isDialog()).captureRoboImage(
             filePath = "build/outputs/roborazzi/$fileName",
         )
     }

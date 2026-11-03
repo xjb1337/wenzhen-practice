@@ -17,7 +17,9 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.ChildCare
 import androidx.compose.material.icons.outlined.Favorite
+import androidx.compose.material.icons.outlined.Healing
 import androidx.compose.material.icons.outlined.LocalHospital
+import androidx.compose.material.icons.outlined.MedicalServices
 import androidx.compose.material.icons.outlined.PregnantWoman
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Restaurant
@@ -284,13 +286,23 @@ fun DepartmentMark(
 
 fun departmentIcon(department: String): ImageVector = when (department) {
     Departments.CARDIOLOGY -> Icons.Outlined.Favorite
-    Departments.GASTROENTEROLOGY -> Icons.Outlined.Restaurant
     Departments.RESPIRATORY -> Icons.Outlined.WaterDrop
+    Departments.GASTROENTEROLOGY -> Icons.Outlined.Restaurant
     Departments.NEUROLOGY -> Icons.Outlined.Psychology
     Departments.ENDOCRINOLOGY -> Icons.Outlined.WaterDrop
+    Departments.NEPHROLOGY -> Icons.Outlined.WaterDrop
+    Departments.HEMATOLOGY -> Icons.Outlined.Favorite
+    Departments.RHEUMATOLOGY -> Icons.Outlined.Healing
+    Departments.INFECTIOUS_DISEASE -> Icons.Outlined.LocalHospital
+    Departments.GENERAL_SURGERY -> Icons.Outlined.MedicalServices
+    Departments.ORTHOPEDICS -> Icons.Outlined.MedicalServices
     Departments.UROLOGY -> Icons.Outlined.WaterDrop
+    Departments.OBSTETRICS_GYNECOLOGY -> Icons.Outlined.PregnantWoman
     Departments.PEDIATRICS -> Icons.Outlined.ChildCare
-    Departments.GYNECOLOGY -> Icons.Outlined.PregnantWoman
+    Departments.PSYCHIATRY -> Icons.Outlined.Psychology
+    Departments.ENT -> Icons.Outlined.LocalHospital
+    Departments.OPHTHALMOLOGY -> Icons.Outlined.LocalHospital
+    Departments.DERMATOLOGY -> Icons.Outlined.Healing
     else -> Icons.Outlined.LocalHospital
 }
 
@@ -300,9 +312,19 @@ fun departmentForeground(department: String): Color = when (department) {
     Departments.RESPIRATORY -> TealSecondary
     Departments.NEUROLOGY -> Color(0xFF5E6BC7)
     Departments.ENDOCRINOLOGY -> Color(0xFF00838F)
+    Departments.NEPHROLOGY -> Color(0xFF00838F)
+    Departments.HEMATOLOGY -> Color(0xFFC62828)
+    Departments.RHEUMATOLOGY -> Color(0xFF6A1B9A)
+    Departments.INFECTIOUS_DISEASE -> Color(0xFFEF6C00)
+    Departments.GENERAL_SURGERY -> Color(0xFF1565C0)
+    Departments.ORTHOPEDICS -> Color(0xFF5D4037)
     Departments.UROLOGY -> Color(0xFF1976D2)
+    Departments.OBSTETRICS_GYNECOLOGY -> Color(0xFFAD1457)
     Departments.PEDIATRICS -> Color(0xFFEF6C00)
-    Departments.GYNECOLOGY -> Color(0xFFAD1457)
+    Departments.PSYCHIATRY -> Color(0xFF5E6BC7)
+    Departments.ENT -> Color(0xFF00796B)
+    Departments.OPHTHALMOLOGY -> Color(0xFF00838F)
+    Departments.DERMATOLOGY -> Color(0xFF8D6E63)
     else -> TealPrimary
 }
 

@@ -10,7 +10,7 @@ on:
       version_code:
         description: 'versionCode（整数）'
         required: true
-        default: '1'
+        default: '2'
         type: string
       release_notes:
         description: '发布说明（支持多行）'
@@ -70,10 +70,43 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           OUT=$("$APKSIGNER" verify --print-certs dist/wenzhen-practice.apk)
           echo "$OUT"
-          CERT=$(echo "$OUT" | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}')
-          if [ -n "$EXPECTED_CERT" ]; then test "$CERT" = "$(echo "$EXPECTED_CERT" | tr 'A-F' 'a-f')" || { echo "签名证书不一致"; exit 1; }; fi
+          CERT=$(echo "$OUT" | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}' | tr -d ':' | tr 'A-F' 'a-f')
+          if [ -n "$EXPECTED_CERT" ]; then test "$CERT" = "$(echo "$EXPECTED_CERT" | tr -d ':' | tr 'A-F' 'a-f')" || { echo "签名证书不一致"; exit 1; }; fi
+          echo "APK_CERT_SHA256=$CERT" >> "$GITHUB_ENV"
           (cd dist && sha256sum wenzhen-practice.apk > wenzhen-practice.apk.sha256)
           cat dist/wenzhen-practice.apk.sha256
+      - name: Generate update manifest
+        env:
+          VERSION: ${{ inputs.version }}
+          VERSION_CODE: ${{ inputs.version_code }}
+          NOTES: ${{ inputs.release_notes }}
+        run: |
+          set -euo pipefail
+          test -n "$APK_CERT_SHA256" || { echo "APK 证书 SHA-256 为空"; exit 1; }
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          version_code = int(os.environ["VERSION_CODE"])
+          checksum = Path("dist/wenzhen-practice.apk.sha256").read_text(encoding="utf-8").split()[0].lower()
+          notes = os.environ.get("NOTES", "").strip() or f"版本 {version}"
+          data = {
+              "versionName": version,
+              "versionCode": version_code,
+              "apkUrl": f"https://github.com/xjb1337/wenzhen-practice/releases/download/v{version}/wenzhen-practice.apk",
+              "sha256": checksum,
+              "signingCertSha256": os.environ["APK_CERT_SHA256"].lower(),
+              "notes": notes,
+              "minSdk": 26,
+          }
+          Path("dist/update.json").write_text(
+              json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          cat dist/update.json
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -81,5 +114,5 @@ jobs:
         run: |
           TAG="v${{ inputs.version }}"
           printf '%s\n\nSHA-256: `%s`\n' "${NOTES:-版本 ${{ inputs.version }}}" "$(cut -d' ' -f1 dist/wenzhen-practice.apk.sha256)" > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" dist/wenzhen-practice.apk dist/wenzhen-practice.apk.sha256 \
+          gh release create "$TAG" dist/wenzhen-practice.apk dist/wenzhen-practice.apk.sha256 dist/update.json \
             --target "$GITHUB_SHA" --title "问诊练习 $TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest

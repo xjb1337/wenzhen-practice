@@ -2,6 +2,7 @@ package com.xjb.wenzhen.data.api
 
 import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
@@ -10,6 +11,8 @@ import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.InterruptedIOException
+import java.net.SocketTimeoutException
 import java.util.concurrent.TimeUnit
 
 class DeepSeekClient(
@@ -22,32 +25,13 @@ class DeepSeekClient(
         jsonMode: Boolean,
         temperature: Double,
     ): String = withContext(Dispatchers.IO) {
-        if (config.apiKey.isBlank()) {
-            throw LlmException("请先在设置中填写 DeepSeek API Key。")
-        }
-
-        val payload = JSONObject().apply {
-            put("model", config.model)
-            put("temperature", temperature)
-            put("messages", JSONArray().apply {
-                messages.forEach { message ->
-                    put(JSONObject().apply {
-                        put("role", message.role)
-                        put("content", message.content)
-                    })
-                }
-            })
+        requireApiKey(config)
+        val payload = payload(config, messages, temperature).apply {
             if (jsonMode) {
                 put("response_format", JSONObject().put("type", "json_object"))
             }
         }
-        val request = Request.Builder()
-            .url(completionUrl(config.baseUrl))
-            .header("Authorization", "Bearer ${config.apiKey}")
-            .header("Accept", "application/json")
-            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
-            .build()
-
+        val request = request(config, payload, accept = "application/json")
         try {
             httpClient.newCall(request).execute().use { response ->
                 val body = response.body?.string().orEmpty()
@@ -56,10 +40,124 @@ class DeepSeekClient(
                 }
                 parseContent(body)
             }
+        } catch (error: CancellationException) {
+            throw error
         } catch (error: LlmException) {
             throw error
         } catch (error: Exception) {
-            throw LlmException("无法连接 AI 服务，请检查网络和 Base URL 后重试。", error)
+            throw LlmException(networkErrorMessage(error), error)
+        }
+    }
+
+    override suspend fun stream(
+        config: LlmConfig,
+        messages: List<LlmMessage>,
+        temperature: Double,
+        onDelta: suspend (String) -> Unit,
+    ): String = withContext(Dispatchers.IO) {
+        requireApiKey(config)
+        val payload = payload(config, messages, temperature).put("stream", true)
+        val request = request(config, payload, accept = "text/event-stream")
+        try {
+            httpClient.newCall(request).execute().use { response ->
+                if (!response.isSuccessful) {
+                    throw LlmException(httpErrorMessage(response.code, response.body?.string().orEmpty()))
+                }
+                val source = response.body?.source()
+                    ?: throw LlmException("AI 服务没有返回内容，请稍后重试。")
+                val answer = StringBuilder()
+                var finished = false
+                while (!finished) {
+                    val line = source.readUtf8Line() ?: break
+                    when (val event = SseParser.parseLine(line)) {
+                        is SseEvent.Delta -> {
+                            answer.append(event.text)
+                            onDelta(event.text)
+                        }
+                        SseEvent.Done -> finished = true
+                        SseEvent.Ignore -> Unit
+                        is SseEvent.Error -> throw LlmException("AI 服务返回错误：${event.message}")
+                    }
+                }
+                val result = answer.toString().trim()
+                if (result.isBlank()) {
+                    throw LlmException("AI 服务未返回可用回复，请稍后重试。")
+                }
+                result
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: LlmException) {
+            throw error
+        } catch (error: Exception) {
+            throw LlmException(networkErrorMessage(error), error)
+        }
+    }
+
+    override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+        withContext(Dispatchers.IO) {
+            if (config.apiKey.isBlank()) {
+                return@withContext ConnectionTestResult.Failure("请先填写 DeepSeek API Key。")
+            }
+            val payload = JSONObject().apply {
+                put("model", config.model)
+                put("temperature", 0)
+                put("max_tokens", 1)
+                put("stream", false)
+                put("messages", JSONArray().put(JSONObject().apply {
+                    put("role", "user")
+                    put("content", "ping")
+                }))
+            }
+            val request = try {
+                request(config, payload, accept = "application/json")
+            } catch (error: LlmException) {
+                return@withContext ConnectionTestResult.Failure(error.message ?: "接口地址无效。")
+            }
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (response.isSuccessful) {
+                        ConnectionTestResult.Success
+                    } else {
+                        ConnectionTestResult.Failure(httpErrorMessage(response.code, body))
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                ConnectionTestResult.Failure(networkErrorMessage(error))
+            }
+        }
+
+    private fun payload(
+        config: LlmConfig,
+        messages: List<LlmMessage>,
+        temperature: Double,
+    ): JSONObject = JSONObject().apply {
+        put("model", config.model)
+        put("temperature", temperature)
+        put("messages", JSONArray().apply {
+            messages.forEach { message ->
+                put(JSONObject().apply {
+                    put("role", message.role)
+                    put("content", message.content)
+                })
+            }
+        })
+    }
+
+    private fun request(config: LlmConfig, payload: JSONObject, accept: String): Request =
+        Request.Builder()
+            .url(completionUrl(config.baseUrl))
+            .header("Authorization", "Bearer ${config.apiKey}")
+            .header("Accept", accept)
+            .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+    private fun requireApiKey(config: LlmConfig) {
+        if (config.apiKey.isBlank()) {
+            throw LlmException("请先在设置中填写 DeepSeek API Key。")
         }
     }
 
@@ -94,15 +192,25 @@ class DeepSeekClient(
         }.getOrDefault("").take(240)
         return when {
             code == 401 || code == 403 -> "API Key 无效或没有访问权限，请检查设置。"
-            code == 429 -> "AI 服务请求过于频繁，请稍后再试。"
+            code == 402 -> "DeepSeek 账户余额不足，请充值后重试。"
+            code == 429 -> "请求过于频繁，已触发限流，请稍后再试。"
             code >= 500 -> "AI 服务暂时不可用，请稍后再试。"
             providerMessage.isNotBlank() -> "AI 请求失败（HTTP $code）：$providerMessage"
             else -> "AI 请求失败（HTTP $code），请检查模型和 Base URL。"
         }
     }
 
+    private fun networkErrorMessage(error: Exception): String = when (error) {
+        is SocketTimeoutException, is InterruptedIOException ->
+            "连接超时，请检查网络或稍后重试。"
+        else -> "网络错误，无法连接 DeepSeek 服务，请检查网络后重试。"
+    }
+
     private fun completionUrl(baseUrl: String): String {
         val base = baseUrl.trim().ifBlank { "https://api.deepseek.com" }.trimEnd('/')
+        if (!base.startsWith("https://", ignoreCase = true)) {
+            throw LlmException("接口地址必须以 https:// 开头，以免 API Key 明文传输。")
+        }
         return if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
     }
 

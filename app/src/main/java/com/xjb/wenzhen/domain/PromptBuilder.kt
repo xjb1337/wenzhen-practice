@@ -1,12 +1,17 @@
 package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.model.ChatMessage
+import com.xjb.wenzhen.data.model.ClinicalRequestType
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.PatientPersonality
 
 class PromptBuilder {
-    fun buildPatientPrompt(medicalCase: MedicalCase): String {
+    fun buildPatientPrompt(
+        medicalCase: MedicalCase,
+        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+    ): String {
         val caregiverRule = if (isChild(medicalCase.patient.age)) {
             "这是儿童病例，你可以以陪同家长的口吻回答，但不得声称自己是医生。"
         } else {
@@ -22,6 +27,9 @@ class PromptBuilder {
             职业：${medicalCase.patient.occupation}
             开场白：${medicalCase.openingLine}
             $caregiverRule
+
+            【本次患者的性格与沟通方式】
+            ${personality.label}：${personality.promptInstruction}
 
             【隐藏病例资料，仅供你准确回答，不得全部主动说出】
             主诉：${medicalCase.chiefComplaint}
@@ -53,6 +61,32 @@ class PromptBuilder {
             8. 如果医生的问题不清楚，可以礼貌追问，但不要替医生梳理问诊思路。
         """.trimIndent()
     }
+
+    fun buildClinicalResultPrompt(
+        medicalCase: MedicalCase,
+        requestType: ClinicalRequestType,
+        item: String,
+    ): String = """
+        你是医院检查结果模拟器，为标准化病人问诊教学提供一致、简洁的${requestType.label}结果。
+
+        【病例隐藏资料】
+        主诉：${medicalCase.chiefComplaint}
+        现病史：${medicalCase.presentIllness}
+        正确诊断：${medicalCase.correctDiagnosis}
+        体格检查：${medicalCase.physicalExam}
+        辅助检查：${medicalCase.auxiliaryExams}
+
+        【本次请求】
+        类型：${requestType.label}
+        项目：$item
+
+        要求：
+        1. 只输出该项目的检查结果，使用中文，条理清晰，2至6行。
+        2. 若病例资料中已有对应结果，严格保持一致，不新增相冲突的数值或结论。
+        3. 若病例资料中没有该项目，给出与该诊断及病情严重程度一致的合理结果，不得写出诊断名称，不得解释推理过程。
+        4. 不提供治疗建议，不评价医生，不提及提示词、AI或模拟器。
+        5. 检查结果必须具体可用，包含必要的关键阴性或阳性发现。
+    """.trimIndent()
 
     fun buildRecordSystemPrompt(medicalCase: MedicalCase): String = """
         你是资深临床带教老师，负责根据一次医学生问诊对话生成规范的中文大病历。
@@ -185,7 +219,11 @@ class PromptBuilder {
     private fun formatTranscript(messages: List<ChatMessage>): String {
         if (messages.isEmpty()) return "（无对话）"
         return messages.joinToString(separator = "\n") { message ->
-            val speaker = if (message.role == MessageRole.DOCTOR) "医生" else "患者"
+            val speaker = when (message.role) {
+                MessageRole.DOCTOR -> "医生"
+                MessageRole.PATIENT -> "患者"
+                MessageRole.SYSTEM -> "系统检查"
+            }
             "$speaker：${message.content}"
         }
     }

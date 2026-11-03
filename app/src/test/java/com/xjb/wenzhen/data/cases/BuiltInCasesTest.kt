@@ -1,5 +1,6 @@
 package com.xjb.wenzhen.data.cases
 
+import com.xjb.wenzhen.data.model.Departments
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -7,11 +8,14 @@ import org.junit.Test
 
 class BuiltInCasesTest {
     @Test
-    fun `病例库包含十个字段完整的标准病例`() {
+    fun `病例库至少包含三十个字段完整且覆盖全部科室的病例`() {
         val cases = BuiltInCases.all
 
-        assertEquals(10, cases.size)
-        assertEquals(10, cases.map { it.id }.distinct().size)
+        assertTrue(cases.size >= 30)
+        assertEquals(cases.size, cases.map { it.id }.distinct().size)
+        Departments.all.filter { it != Departments.ALL }.forEach { department ->
+            assertTrue("科室 $department 没有内置病例", cases.any { it.department == department })
+        }
         assertTrue(cases.any { it.correctDiagnosis.contains("心肌梗死") })
         assertTrue(cases.any { it.correctDiagnosis.contains("阑尾炎") })
         assertTrue(cases.any { it.correctDiagnosis.contains("肺炎") })

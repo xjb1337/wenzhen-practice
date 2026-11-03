@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material.icons.outlined.Settings
@@ -36,6 +37,7 @@ import com.xjb.wenzhen.ui.screens.HistoryDetailScreen
 import com.xjb.wenzhen.ui.screens.HistoryScreen
 import com.xjb.wenzhen.ui.screens.ResultScreen
 import com.xjb.wenzhen.ui.screens.SettingsScreen
+import com.xjb.wenzhen.ui.screens.StatsScreen
 import com.xjb.wenzhen.ui.components.EmptyState
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.TealPrimary
@@ -43,6 +45,7 @@ import com.xjb.wenzhen.ui.theme.TealPrimary
 private object Routes {
     const val LIBRARY = "library"
     const val HISTORY = "history"
+    const val STATS = "stats"
     const val SETTINGS = "settings"
     const val CHAT = "chat"
     const val FINISH = "finish"
@@ -61,6 +64,7 @@ private data class BottomDestination(
 private val bottomDestinations = listOf(
     BottomDestination(Routes.LIBRARY, "病例库", Icons.Outlined.LocalHospital),
     BottomDestination(Routes.HISTORY, "历史", Icons.Outlined.History),
+    BottomDestination(Routes.STATS, "统计", Icons.Outlined.BarChart),
     BottomDestination(Routes.SETTINGS, "设置", Icons.Outlined.Settings),
 )
 
@@ -89,9 +93,6 @@ fun WenzhenApp(viewModel: AppViewModel) {
                 }
                 AppEvent.SettingsSaved -> {
                     snackbarHostState.showSnackbar("设置已保存")
-                    if (navController.currentDestination?.route == Routes.SETTINGS) {
-                        navController.popBackStack()
-                    }
                 }
             }
         }
@@ -147,6 +148,14 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onBrowseCases = { navigateToRoot(navController, Routes.LIBRARY) },
                 )
             }
+            composable(Routes.STATS) {
+                StatsScreen(
+                    stats = uiState.stats,
+                    isLoading = uiState.historyLoading,
+                    errorMessage = uiState.historyError,
+                    onRetry = viewModel::retryHistory,
+                )
+            }
             composable(Routes.SETTINGS) {
                 SettingsScreen(
                     settings = uiState.settings,
@@ -154,6 +163,14 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onBack = { navController.popBackStack() },
                     saveError = uiState.settingsSaveError,
                     onDismissError = viewModel::clearSettingsSaveError,
+                    onTestConnection = viewModel::testConnection,
+                    connectionTest = uiState.connectionTest,
+                    onCheckUpdate = viewModel::checkForUpdate,
+                    updateState = uiState.updateState,
+                    onDownloadUpdate = viewModel::downloadUpdate,
+                    onDismissUpdate = viewModel::dismissUpdateDialog,
+                    currentVersionName = uiState.currentVersionName,
+                    currentVersionCode = uiState.currentVersionCode,
                 )
             }
             composable(Routes.CHAT) {
@@ -180,6 +197,10 @@ fun WenzhenApp(viewModel: AppViewModel) {
                             navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
                         },
                         onDismissError = viewModel::clearChatError,
+                        onRetryMessage = viewModel::retryFailedMessage,
+                        onRequestClinical = viewModel::requestClinical,
+                        isQueryingClinical = uiState.isQueryingClinical,
+                        startedAtMillis = uiState.consultationStartedAt ?: System.currentTimeMillis(),
                     )
                 }
             }
