@@ -171,15 +171,16 @@ class CaseGenerationService(
         department: String,
         difficulty: Difficulty,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
     ): Pair<MedicalCase, PatientPersonality> {
         val raw = llmClient.complete(
             config = config,
             messages = listOf(
                 LlmMessage(
                     "system",
-                    promptBuilder.buildCaseGenerationPrompt(department, difficulty, personality),
+                    promptBuilder.buildCaseGenerationPrompt(department, difficulty, personality, encounterType),
                 ),
-                LlmMessage("user", "请按要求生成这个$department、${difficulty.label}难度的教学病例，只输出 JSON。"),
+                LlmMessage("user", "请按要求生成这个$department、${difficulty.label}难度、${encounterType.label}的教学病例，只输出 JSON。"),
             ),
             jsonMode = true,
             temperature = 0.9,

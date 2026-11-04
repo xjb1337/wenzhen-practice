@@ -1,7 +1,9 @@
 package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.EncounterType
+import com.xjb.wenzhen.data.model.PatientPersonality
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -107,5 +109,36 @@ class PromptBuilderTest {
         assertTrue(inpatientWithoutTreatment.contains("用于“诊疗计划”"))
         assertTrue(inpatientWithoutTreatment.contains("未填写"))
         assertFalse(outpatient.contains("用于“诊疗计划”"))
+    }
+
+    @Test
+    fun `病例生成提示词包含就诊类型并按门诊住院区分`() {
+        val outpatient = promptBuilder.buildCaseGenerationPrompt(
+            department = "心内科",
+            difficulty = Difficulty.MEDIUM,
+            personality = PatientPersonality.COOPERATIVE,
+            encounterType = EncounterType.OUTPATIENT,
+        )
+        val inpatient = promptBuilder.buildCaseGenerationPrompt(
+            department = "心内科",
+            difficulty = Difficulty.MEDIUM,
+            personality = PatientPersonality.COOPERATIVE,
+            encounterType = EncounterType.INPATIENT,
+        )
+
+        assertNotEquals(outpatient, inpatient)
+        assertTrue(outpatient.contains(EncounterType.OUTPATIENT.label))
+        assertTrue(inpatient.contains(EncounterType.INPATIENT.label))
+        assertTrue(outpatient.contains("按门诊场景编写"))
+        assertTrue(inpatient.contains("按住院场景编写"))
+
+        val elderly = promptBuilder.buildCaseGenerationPrompt(
+            department = "心内科",
+            difficulty = Difficulty.EASY,
+            personality = PatientPersonality.ELDERLY,
+            encounterType = EncounterType.INPATIENT,
+        )
+        assertTrue(elderly.contains("年龄必须大于等于60岁"))
+        assertTrue(elderly.contains(EncounterType.INPATIENT.label))
     }
 }

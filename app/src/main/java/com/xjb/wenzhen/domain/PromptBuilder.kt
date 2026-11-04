@@ -194,10 +194,12 @@ class PromptBuilder {
         department: String,
         difficulty: Difficulty,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
     ): String = """
         你是一名临床教学病例编写专家。请生成一个可用于医学生问诊练习的中文标准化病人病例。
         科室：$department
         难度：${difficulty.label}
+        就诊类型：${encounterType.label}。${if (encounterType == EncounterType.OUTPATIENT) "按门诊场景编写：主诉与现病史突出、可在门诊完成的诊治路径，既往史与过敏史够用即可，不必写成住院大病历深度。" else "按住院场景编写：现病史与系统回顾更完整，个人史、婚育史、家族史和入院评估要点应充实，便于住院问诊练习。"}
         患者性格：${personality.label}。${if (personality == PatientPersonality.ELDERLY) "年龄必须大于等于60岁。" else if (personality == PatientPersonality.IMPATIENT) "年龄必须大于等于14岁。" else ""}
 
         只输出一个合法 JSON 对象，不要Markdown代码围栏，不要解释。结构必须如下：
@@ -228,7 +230,7 @@ class PromptBuilder {
         }
 
         要求：
-        1. 所有字段都必须非空，内容符合中国临床场景和所选科室、难度。
+        1. 所有字段都必须非空，内容符合中国临床场景和所选科室、难度、就诊类型。
         2. keyQuestions 必须正好有10至15条，覆盖主要病史、伴随症状、既往史、危险因素和鉴别要点。
         3. 开场白只包含患者能感知的症状，不得直接公布诊断、化验或影像结论。
         4. 体格检查和辅助检查应支持正确诊断，同时保留合理鉴别空间。
