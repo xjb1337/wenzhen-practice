@@ -73,7 +73,7 @@ fun CaseLibraryScreen(
     builtInCount: Int,
     onDepartmentSelected: (String) -> Unit = {},
     onCaseSelected: (MedicalCase, PatientPersonality, EncounterType) -> Unit = { _, _, _ -> },
-    onGenerateCase: (String, Difficulty, PatientPersonality) -> Unit = { _, _, _ -> },
+    onGenerateCase: (String, Difficulty, PatientPersonality, EncounterType) -> Unit = { _, _, _, _ -> },
     onOpenSettings: () -> Unit = {},
     onClearGenerationError: () -> Unit = {},
     isGenerating: Boolean = false,
@@ -208,9 +208,9 @@ fun CaseLibraryScreen(
             },
             isGenerating = isGenerating,
             onDismiss = { showGenerateDialog = false },
-            onGenerate = { department, difficulty, personality ->
+            onGenerate = { department, difficulty, personality, encounterType ->
                 showGenerateDialog = false
-                onGenerateCase(department, difficulty, personality)
+                onGenerateCase(department, difficulty, personality, encounterType)
             },
             onOpenSettings = {
                 showGenerateDialog = false
@@ -481,12 +481,13 @@ private fun GenerateCaseDialog(
     initialDepartment: String,
     isGenerating: Boolean,
     onDismiss: () -> Unit,
-    onGenerate: (String, Difficulty, PatientPersonality) -> Unit,
+    onGenerate: (String, Difficulty, PatientPersonality, EncounterType) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     var department by rememberSaveable { mutableStateOf(initialDepartment) }
     var difficulty by rememberSaveable { mutableStateOf(Difficulty.MEDIUM) }
     var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
+    var encounterType by rememberSaveable { mutableStateOf(EncounterType.OUTPATIENT) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -528,6 +529,19 @@ private fun GenerateCaseDialog(
                     selected = personality,
                     onSelected = { personality = it },
                 )
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("就诊类型", style = MaterialTheme.typography.titleSmall)
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        EncounterType.entries.forEach { type ->
+                            FilterChip(
+                                selected = encounterType == type,
+                                onClick = { encounterType = type },
+                                label = { Text(type.label) },
+                                shape = CircleShape,
+                            )
+                        }
+                    }
+                }
                 if (!hasApiKey) {
                     NoticeBanner(
                         message = "还没有配置 DeepSeek API Key，无法生成病例。",
@@ -552,7 +566,7 @@ private fun GenerateCaseDialog(
             Button(
                 onClick = {
                     if (hasApiKey) {
-                        onGenerate(department, difficulty, personality)
+                        onGenerate(department, difficulty, personality, encounterType)
                     } else {
                         onOpenSettings()
                     }

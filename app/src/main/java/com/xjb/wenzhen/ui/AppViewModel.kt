@@ -362,6 +362,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         department: String,
         difficulty: Difficulty,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
     ) {
         val state = _uiState.value
         if (state.isGeneratingCase) return
@@ -383,6 +384,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     department = department,
                     difficulty = difficulty,
                     personality = personality,
+                    encounterType = encounterType,
                 )
                 _uiState.update { latest ->
                     latest.copy(
@@ -391,7 +393,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                         generationError = null,
                     )
                 }
-                openCase(generated, finalPersonality)
+                openCase(generated, finalPersonality, encounterType)
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(

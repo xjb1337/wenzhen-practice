@@ -27,7 +27,7 @@ class AppContainer(context: Context) {
     init {
         @Suppress("DEPRECATION")
         val info = appContext.packageManager.getPackageInfo(appContext.packageName, 0)
-        currentVersionName = info.versionName.orEmpty().ifBlank { "1.2.0" }
+        currentVersionName = info.versionName.orEmpty().ifBlank { "1.2.1" }
         currentVersionCode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             info.longVersionCode.toInt()
         } else {
