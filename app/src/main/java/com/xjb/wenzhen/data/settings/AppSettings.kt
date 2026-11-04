@@ -2,6 +2,7 @@ package com.xjb.wenzhen.data.settings
 
 import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.ThinkingLevel
+import com.xjb.wenzhen.ui.theme.AppTheme
 
 data class AppSettings(
     val apiKey: String = "",
@@ -10,6 +11,7 @@ data class AppSettings(
     val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     val generateRecord: Boolean = false,
     val offlineMode: Boolean = false,
+    val theme: AppTheme = AppTheme.DEFAULT,
 ) {
     val hasApiKey: Boolean
         get() = apiKey.isNotBlank()

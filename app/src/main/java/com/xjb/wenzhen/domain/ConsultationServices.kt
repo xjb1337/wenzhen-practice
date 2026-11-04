@@ -2,6 +2,7 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.api.LlmClient
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
+import com.xjb.wenzhen.data.model.CaseGenerationDepartments
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.ClinicalRequestType
 import com.xjb.wenzhen.data.model.Difficulty
@@ -56,8 +57,15 @@ class PatientChatService(
         encounterType: EncounterType,
     ): List<LlmMessage> = buildList {
         add(LlmMessage("system", promptBuilder.buildPatientPrompt(medicalCase, personality, encounterType)))
-        val usable = messages
-            .filter { it.role != MessageRole.SYSTEM && it.deliveryState == MessageDeliveryState.SENT }
+        // 本轮医生提问在 AppViewModel.sendMessage 里被标记为 SENDING，回复完成后才改成 SENT。
+        // 若这里只保留 SENT，API 收到的最后一条会是「上一轮患者回复」，模型就会回答上一轮问题
+        // （用户反馈的「答非所问 / 滞后一轮」）。因此把「医生且 SENDING」一并纳入，
+        // 保证请求体末尾始终是当前这一轮的医生提问。FAILED 不纳入，避免把未送达的问题当上下文。
+        val usable = messages.filter { message ->
+            message.role != MessageRole.SYSTEM &&
+                (message.deliveryState == MessageDeliveryState.SENT ||
+                    (message.role == MessageRole.DOCTOR && message.deliveryState == MessageDeliveryState.SENDING))
+        }
         val context = if (usable.size <= 80) usable else listOf(usable.first()) + usable.takeLast(79)
         context.forEach { message ->
             add(
@@ -181,7 +189,8 @@ object ScoreReconciler {
         messages: List<ChatMessage>,
         rule: RuleScore? = null,
     ): ScoreResult {
-        if (score.isLegacy) return score
+        // 旧版模型 JSON 缺少 treatment 分项时 isLegacy=true，但那只是模型自报分；
+        // 只要本地规则分存在就必须覆盖，否则模型自报分直接生效、满分口径还会变成 40/20/20/20。
         if (rule != null) {
             val coveredPoints = rule.evidence
                 .filter { it.messageIndexes.isNotEmpty() }
@@ -200,6 +209,7 @@ object ScoreReconciler {
                 coveredPoints = coveredPoints,
                 missedQuestions = rule.missedQuestions.distinct(),
                 evidence = rule.evidence,
+                isLegacy = false,
             )
         }
         val evidence = QuestionCoverageAnalyzer.analyze(medicalCase, messages)
@@ -231,15 +241,16 @@ object ScoreReconciler {
     }
 
     /**
-     * 校验模型给出的证据编号：必须指向真实存在的非系统消息；全部编号无效时丢弃该条覆盖点，
-     * 部分无效时仅去掉无效编号，避免“引用编号不存在”被当作有效证据。
+     * 校验模型给出的证据编号：编号必须指向 [PromptBuilder.formatTranscript] 里真实存在的非系统条目，
+     * 全部编号无效时丢弃该条覆盖点，部分无效时仅去掉无效编号，避免“引用编号不存在”被当作有效证据。
      */
     private fun sanitizeReference(point: String, messages: List<ChatMessage>): String? {
         val refs = Regex("\\[(\\d+)]").findAll(point).toList()
         if (refs.isEmpty()) return point
+        val transcript = transcriptEntries(messages)
         val valid = refs.filter { match ->
             val index = match.groupValues[1].toIntOrNull() ?: return@filter false
-            index in 1..messages.size && messages[index - 1].role != MessageRole.SYSTEM
+            index in 1..transcript.size && transcript[index - 1].role != MessageRole.SYSTEM
         }
         if (valid.isEmpty()) return null
         var cleaned = point
@@ -269,7 +280,13 @@ class CaseGenerationService(
             messages = listOf(
                 LlmMessage(
                     "system",
-                    promptBuilder.buildCaseGenerationPrompt(department, difficulty, personality, encounterType),
+                    promptBuilder.buildCaseGenerationPrompt(
+                        department = department,
+                        difficulty = difficulty,
+                        personality = personality,
+                        encounterType = encounterType,
+                        departmentHint = CaseGenerationDepartments.hintFor(department),
+                    ),
                 ),
                 LlmMessage("user", "请按要求生成这个$department、${difficulty.label}难度、${encounterType.label}的教学病例，只输出 JSON。"),
             ),

@@ -27,6 +27,7 @@ import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
 import com.xjb.wenzhen.domain.OfflinePracticeService
+import com.xjb.wenzhen.ui.theme.AppTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
@@ -108,10 +109,17 @@ class AppViewModel(
             .onSuccess { _uiState.update { it.copy(settings = updated) } }
     }
 
+    /** 主题即点即存；MainActivity 通过 uiState.settings.theme 驱动 WenzhenTheme。 */
+    fun setTheme(theme: AppTheme) {
+        val updated = _uiState.value.settings.copy(theme = theme)
+        runCatching { container.settingsRepository.save(updated) }
+            .onSuccess { _uiState.update { it.copy(settings = updated) } }
+    }
+
     fun resumeDraft() {
         val draft = _uiState.value.draft ?: return
         val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return
-        val messages = ConversationJsonCodec.decode(draft.conversationJson)
+        val messages = reconcileRecoveredConversation(ConversationJsonCodec.decode(draft.conversationJson))
         _uiState.update {
             it.copy(
                 activeCase = medicalCase,
@@ -119,12 +127,30 @@ class AppViewModel(
                 encounterType = EncounterType.from(draft.encounterType),
                 consultationStartedAt = draft.startedAt,
                 messages = messages,
+                isPatientTyping = false,
+                isQueryingClinical = false,
+                chatError = null,
                 finishError = null,
                 currentResult = null,
             )
         }
         viewModelScope.launch { _events.send(AppEvent.OpenChat) }
     }
+
+    /**
+     * 草稿可能是在“医生提问已发出、患者回复还在生成”时被保存的。恢复时必须把上次中断的请求
+     * 归一化成可操作状态：半截患者消息丢弃，未收到回复的医生提问标记为 FAILED（界面会显示
+     * “发送失败，重试”），否则会留下永远停在 SENDING 的消息、重试按钮也不出现。
+     */
+    private fun reconcileRecoveredConversation(messages: List<ChatMessage>): List<ChatMessage> =
+        messages.mapNotNull { message ->
+            when {
+                message.role == MessageRole.PATIENT && message.deliveryState == MessageDeliveryState.SENDING -> null
+                message.role == MessageRole.DOCTOR && message.deliveryState != MessageDeliveryState.SENT ->
+                    message.copy(deliveryState = MessageDeliveryState.FAILED)
+                else -> message
+            }
+        }
 
     fun discardDraft() {
         viewModelScope.launch { container.consultationDraftRepository.clear() }
@@ -728,13 +754,12 @@ class AppViewModel(
             _uiState.update { it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。") }
             return
         }
-        val newSettings = AppSettings(
+        val newSettings = _uiState.value.settings.copy(
             apiKey = apiKey.trim(),
             model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
             baseUrl = normalizedUrl,
             thinkingLevel = thinkingLevel,
             generateRecord = generateRecord,
-            offlineMode = _uiState.value.settings.offlineMode,
         )
         try {
             container.settingsRepository.save(newSettings)
@@ -1040,20 +1065,31 @@ class AppViewModel(
         draftSaveJob?.cancel()
         draftSaveJob = viewModelScope.launch {
             delay(350)
-            val state = _uiState.value
-            val medicalCase = state.activeCase ?: return@launch
-            val startedAt = state.consultationStartedAt ?: return@launch
-            val draft = ConsultationDraftEntity(
-                caseJson = CaseJsonCodec.encode(medicalCase),
-                conversationJson = ConversationJsonCodec.encode(state.messages),
-                patientPersonality = state.patientPersonality.name,
-                encounterType = state.encounterType.name,
-                startedAt = startedAt,
-                updatedAt = System.currentTimeMillis(),
-            )
-            container.consultationDraftRepository.save(draft)
-            _uiState.update { it.copy(draft = draft) }
+            persistDraftNow()
         }
+    }
+
+    /** App 退到后台/可能被系统回收前调用：跳过 350ms 防抖，立即把当前对话写入草稿。 */
+    fun flushDraft() {
+        if (_uiState.value.activeCase == null || _uiState.value.consultationStartedAt == null) return
+        draftSaveJob?.cancel()
+        draftSaveJob = viewModelScope.launch { persistDraftNow() }
+    }
+
+    private suspend fun persistDraftNow() {
+        val state = _uiState.value
+        val medicalCase = state.activeCase ?: return
+        val startedAt = state.consultationStartedAt ?: return
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(state.messages),
+            patientPersonality = state.patientPersonality.name,
+            encounterType = state.encounterType.name,
+            startedAt = startedAt,
+            updatedAt = System.currentTimeMillis(),
+        )
+        container.consultationDraftRepository.save(draft)
+        _uiState.update { it.copy(draft = draft) }
     }
 
     private fun friendlyMessage(error: Throwable, fallback: String): String =

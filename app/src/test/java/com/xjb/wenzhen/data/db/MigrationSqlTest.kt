@@ -63,14 +63,17 @@ class MigrationSqlTest {
     }
 
     @Test
-    fun `v4到v5创建病例库表且收藏默认关闭`() {
+    fun `v4到v5创建病例库表且结构与实体和导出schema一致`() {
         val sql = AppDatabase.MIGRATION_4_5_SQL
 
         assertTrue(sql.startsWith("CREATE TABLE IF NOT EXISTS saved_cases"))
         listOf("id", "caseJson", "createdAt", "favorite").forEach {
             assertTrue("缺少字段 $it", sql.contains(it))
         }
-        assertTrue(sql.contains("favorite INTEGER NOT NULL DEFAULT 0"))
+        // 回归：SavedCaseEntity 的 favorite 没有 @ColumnInfo(defaultValue)，
+        // 迁移 SQL 若带 DEFAULT 0，Room 在 onUpgrade 的 onValidateSchema 会判定结构不一致并崩溃。
+        assertTrue(sql.contains("favorite INTEGER NOT NULL"))
+        assertFalse("迁移 SQL 不得再携带 DEFAULT 0", sql.contains("DEFAULT"))
         assertTrue(sql.contains("PRIMARY KEY(id)"))
     }
 }

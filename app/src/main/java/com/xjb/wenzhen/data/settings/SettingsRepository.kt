@@ -5,6 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.xjb.wenzhen.data.model.ThinkingLevel
+import com.xjb.wenzhen.ui.theme.AppTheme
 
 internal fun normalizeModel(name: String?): String {
     val normalized = name?.trim().orEmpty()
@@ -42,6 +43,7 @@ class SettingsRepository(context: Context) {
                 thinkingLevel = ThinkingLevel.from(prefs.getString(KEY_THINKING_LEVEL, null)),
                 generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
                 offlineMode = prefs.getBoolean(KEY_OFFLINE_MODE, false),
+                theme = AppTheme.from(prefs.getString(KEY_THEME, null)),
             )
         }.getOrDefault(AppSettings())
     }
@@ -58,6 +60,7 @@ class SettingsRepository(context: Context) {
             .putString(KEY_THINKING_LEVEL, settings.thinkingLevel.name)
             .putBoolean(KEY_GENERATE_RECORD, settings.generateRecord)
             .putBoolean(KEY_OFFLINE_MODE, settings.offlineMode)
+            .putString(KEY_THEME, settings.theme.name)
             .putString(
                 KEY_BASE_URL,
                 settings.baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL },
@@ -76,5 +79,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_THINKING_LEVEL = "thinking_level"
         private const val KEY_GENERATE_RECORD = "generate_record"
         private const val KEY_OFFLINE_MODE = "offline_mode"
+        private const val KEY_THEME = "app_theme"
     }
 }

@@ -47,6 +47,8 @@ import com.xjb.wenzhen.ui.components.LoadingState
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 
@@ -117,7 +119,7 @@ private fun StatsHero(stats: StatsSummary) {
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                Brush.linearGradient(listOf(TealPrimary, TealSecondary)),
+                Brush.linearGradient(listOf(GradientStart, GradientEnd)),
                 RoundedCornerShape(24.dp),
             )
             .padding(19.dp),
@@ -305,7 +307,7 @@ private fun DepartmentAverageCard(
                                 .fillMaxWidth((item.averageScore / 100.0).toFloat().coerceIn(0.04f, 1f))
                                 .height(8.dp)
                                 .background(
-                                    Brush.horizontalGradient(listOf(TealPrimary, TealSecondary)),
+                                    Brush.horizontalGradient(listOf(GradientStart, GradientEnd)),
                                     CircleShape,
                                 ),
                         )

@@ -1,4 +1,4 @@
-﻿package com.xjb.wenzhen.data.db
+package com.xjb.wenzhen.data.db
 
 import android.content.Context
 import androidx.room.Database
@@ -59,7 +59,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
-        const val MIGRATION_4_5_SQL = "CREATE TABLE IF NOT EXISTS saved_cases (id TEXT NOT NULL, caseJson TEXT NOT NULL, createdAt INTEGER NOT NULL, favorite INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(id))"
+        // 注意：favorite 列必须与 SavedCaseEntity / 导出的 5.json 完全一致（NOT NULL、无 DEFAULT）。
+        // 早期这里写了 `DEFAULT 0`，而实体是 `favorite: Boolean = false`（无 @ColumnInfo(defaultValue)），
+        // Room 在 onUpgrade 后会用 TableInfo 校验列默认值，DEFAULT 不一致会抛
+        // IllegalStateException: Migration didn't properly handle: saved_cases，导致 v4→v5 升级用户冷启动崩溃。
+        // favorite 由实体默认值在每次写入时提供，数据库层面不需要默认值。
+        const val MIGRATION_4_5_SQL = "CREATE TABLE IF NOT EXISTS saved_cases (id TEXT NOT NULL, caseJson TEXT NOT NULL, createdAt INTEGER NOT NULL, favorite INTEGER NOT NULL, PRIMARY KEY(id))"
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL(MIGRATION_4_5_SQL)

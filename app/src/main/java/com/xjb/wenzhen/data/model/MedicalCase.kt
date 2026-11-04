@@ -117,6 +117,18 @@ object Departments {
     const val ENT = "耳鼻喉科"
     const val OPHTHALMOLOGY = "眼科"
     const val DERMATOLOGY = "皮肤科"
+    const val ANORECTAL_SURGERY = "肛肠外科"
+    const val EMERGENCY = "急诊科"
+    const val THORACIC_SURGERY = "胸外科"
+    const val NEUROSURGERY = "神经外科"
+    const val VASCULAR_SURGERY = "血管外科"
+    const val BREAST_SURGERY = "乳腺外科"
+    const val CARDIAC_SURGERY = "心脏大血管外科"
+    const val GERIATRICS = "老年医学科"
+    const val ONCOLOGY = "肿瘤内科"
+    const val ORAL_MAXILLOFACIAL = "口腔颌面外科"
+    const val BURN = "烧伤科"
+    const val ALLERGY = "变态反应科"
 
     val all: List<String> = listOf(
         ALL,
@@ -138,5 +150,17 @@ object Departments {
         ENT,
         OPHTHALMOLOGY,
         DERMATOLOGY,
+        ANORECTAL_SURGERY,
+        EMERGENCY,
+        THORACIC_SURGERY,
+        NEUROSURGERY,
+        VASCULAR_SURGERY,
+        BREAST_SURGERY,
+        CARDIAC_SURGERY,
+        GERIATRICS,
+        ONCOLOGY,
+        ORAL_MAXILLOFACIAL,
+        BURN,
+        ALLERGY,
     )
 }

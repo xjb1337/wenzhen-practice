@@ -4,5 +4,8 @@ object ExtendedBuiltInCases {
     val all = NephrologyHematologyCases.all +
         RheumatologyInfectionCases.all +
         SurgeryOrthopedicsCases.all +
-        PsychiatryEntOphthalmologyDermatologyCases.all
+        PsychiatryEntOphthalmologyDermatologyCases.all +
+        AnorectalEmergencyCases.all +
+        VascularBreastCardiacGeriatricsCases.all +
+        OncologyOralBurnAllergyCases.all
 }

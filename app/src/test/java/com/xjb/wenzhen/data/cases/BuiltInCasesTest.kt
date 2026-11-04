@@ -11,7 +11,7 @@ class BuiltInCasesTest {
     fun `病例库至少包含三十个字段完整且覆盖全部科室的病例`() {
         val cases = BuiltInCases.all
 
-        assertTrue(cases.size >= 30)
+        assertTrue(cases.size >= 54)
         assertEquals(cases.size, cases.map { it.id }.distinct().size)
         Departments.all.filter { it != Departments.ALL }.forEach { department ->
             assertTrue("科室 $department 没有内置病例", cases.any { it.department == department })

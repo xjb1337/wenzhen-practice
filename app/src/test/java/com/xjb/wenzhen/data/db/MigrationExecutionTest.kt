@@ -63,6 +63,8 @@ class MigrationExecutionTest {
             put("id", "ai-1")
             put("caseJson", "{}")
             put("createdAt", 3L)
+            // favorite 在数据库层没有 DEFAULT，Room 写入时总会显式提供实体默认值 false。
+            put("favorite", 0)
         }
         assertTrue(db.insert("saved_cases", null, caseValues) > 0)
 

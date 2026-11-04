@@ -202,6 +202,7 @@ class PromptBuilder {
         difficulty: Difficulty,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
         encounterType: EncounterType = EncounterType.OUTPATIENT,
+        departmentHint: String = "",
     ): String = """
         你是一名临床教学病例编写专家。请生成一个可用于医学生问诊练习的中文标准化病人病例。
         科室：$department
@@ -243,15 +244,20 @@ class PromptBuilder {
         4. 体格检查和辅助检查应支持正确诊断，同时保留合理鉴别空间。
         5. 不要虚构医生已经完成的诊疗过程；内容用于教学，避免侵权和真实个人信息。
     """.trimIndent()
+        .let { prompt ->
+            if (departmentHint.isBlank()) {
+                prompt
+            } else {
+                prompt + "\n\n科室症候参考（仅用于构思问诊要点与鉴别诊断，不得把诊断、化验或影像结论写进开场白）：\n${departmentHint}"
+            }
+        }
 
     /**
      * 完整对话（不截断），逐条编号，便于评分时引用证据。
-     * 发送失败、患者从未收到的医生消息不计入；检查/化验卡片带上标题。
+     * 编号与 [transcriptEntries] 的 1-based 下标一致；检查/化验卡片带上标题。
      */
     internal fun formatTranscript(messages: List<ChatMessage>): String {
-        val usable = messages.filterNot {
-            it.role == MessageRole.DOCTOR && it.deliveryState != MessageDeliveryState.SENT
-        }
+        val usable = transcriptEntries(messages)
         if (usable.isEmpty()) return "（无对话）"
         return usable.mapIndexed { index, message ->
             val speaker = when (message.role) {
@@ -268,3 +274,13 @@ class PromptBuilder {
         return number < 14
     }
 }
+
+/**
+ * 拼装请求体与评分转写共用的“有效消息”列表：
+ * 发送失败、患者从未收到的医生消息不计入（SYSTEM 检查/化验卡片保留）。
+ *
+ * 评分证据编号（[QuestionCoverageAnalyzer] / [ScoreReconciler] / [PromptBuilder.formatTranscript]）
+ * 全部以本列表的 1-based 下标为唯一口径，避免出现“第 0 条”“两套编号对不上”。
+ */
+internal fun transcriptEntries(messages: List<ChatMessage>): List<ChatMessage> =
+    messages.filterNot { it.role == MessageRole.DOCTOR && it.deliveryState != MessageDeliveryState.SENT }

@@ -81,6 +81,8 @@ import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import kotlinx.coroutines.delay
@@ -417,7 +419,7 @@ private fun PatientSummaryCard(medicalCase: MedicalCase) {
                 modifier = Modifier
                     .size(48.dp)
                     .background(
-                        Brush.linearGradient(listOf(TealPrimary, TealSecondary)),
+                        Brush.linearGradient(listOf(GradientStart, GradientEnd)),
                         CircleShape,
                     ),
                 contentAlignment = Alignment.Center,

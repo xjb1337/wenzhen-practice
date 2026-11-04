@@ -12,6 +12,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -22,6 +23,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -51,12 +54,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -74,10 +79,14 @@ import com.xjb.wenzhen.ui.ConnectionTestUiState
 import com.xjb.wenzhen.ui.UpdateUiState
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
+import com.xjb.wenzhen.ui.theme.AppTheme
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
+import com.xjb.wenzhen.ui.theme.paletteFor
 
 @Composable
 fun SettingsScreen(
@@ -103,11 +112,14 @@ fun SettingsScreen(
     currentVersionName: String = "1.2.2",
     currentVersionCode: Int = 5,
     initialGuideExpanded: Boolean = false,
+    theme: AppTheme = settings.theme,
+    onThemeChange: (AppTheme) -> Unit = {},
 ) {
     val context = LocalContext.current
     val knownModels = listOf(AppSettings.MODEL_FLASH, AppSettings.MODEL_PRO)
     val initialModelIndex = knownModels.indexOf(settings.model).takeIf { it >= 0 } ?: 2
-    var apiKey by rememberSaveable { mutableStateOf(settings.apiKey) }
+    // 明文 Key 不写进 savedInstanceState（上轮审查 F-03）。
+    var apiKey by remember { mutableStateOf(settings.apiKey) }
     var showKey by rememberSaveable { mutableStateOf(false) }
     var selectedModelIndex by rememberSaveable { mutableIntStateOf(initialModelIndex) }
     var customModel by rememberSaveable {
@@ -155,7 +167,7 @@ fun SettingsScreen(
                     Column(
                         modifier = Modifier
                             .background(
-                                Brush.linearGradient(listOf(TealPrimary, TealSecondary)),
+                                Brush.linearGradient(listOf(GradientStart, GradientEnd)),
                                 RoundedCornerShape(22.dp),
                             )
                             .padding(17.dp),
@@ -340,6 +352,35 @@ fun SettingsScreen(
                         contentPadding = PaddingValues(horizontal = 4.dp),
                     ) {
                         Text("恢复默认地址")
+                    }
+                }
+            }
+
+            item {
+                SettingsSection(title = "外观主题") {
+                    Text(
+                        text = "深浅配色跟随系统自动切换；选择后立即生效并保存在本机。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        items(AppTheme.entries) { option ->
+                            val swatch = paletteFor(option, false).primary
+                            androidx.compose.material3.FilterChip(
+                                selected = theme == option,
+                                onClick = { onThemeChange(option) },
+                                label = { Text(option.label) },
+                                leadingIcon = {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(14.dp)
+                                            .clip(CircleShape)
+                                            .background(swatch),
+                                    )
+                                },
+                                shape = CircleShape,
+                            )
+                        }
                     }
                 }
             }
