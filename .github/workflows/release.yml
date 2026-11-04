@@ -120,8 +120,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTES: ${{ inputs.release_notes }}
+          GH_REPO: ${{ github.repository }}
         run: |
           TAG="v${{ inputs.version }}"
+          TITLE="问诊练习 $TAG"
           printf '%s\n\nSHA-256: `%s`\n' "${NOTES:-版本 ${{ inputs.version }}}" "$(cut -d' ' -f1 dist/wenzhen-practice.apk.sha256)" > "$RUNNER_TEMP/notes.md"
-          gh release create "$TAG" dist/wenzhen-practice.apk dist/wenzhen-practice.apk.sha256 dist/update.json \
-            --target "$GITHUB_SHA" --title "问诊练习 $TAG" --notes-file "$RUNNER_TEMP/notes.md" --latest
+          set +e
+          for attempt in 1 2 3 4 5; do
+            echo "尝试发布（第 $attempt 次）"
+            if gh release create "$TAG" dist/wenzhen-practice.apk dist/wenzhen-practice.apk.sha256 dist/update.json \
+              --target "$GITHUB_SHA" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" --latest; then
+              echo "发布成功"
+              exit 0
+            fi
+            echo "第 $attempt 次发布失败（exit=$?），检查是否有残留 release"
+            if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release upload "$TAG" dist/wenzhen-practice.apk dist/wenzhen-practice.apk.sha256 dist/update.json --clobber
+              if gh release view "$TAG" --json assets -q '.assets[] | select(.name == "wenzhen-practice.apk") | .name' | grep -q .; then
+                gh release edit "$TAG" --title "$TITLE" --notes-file "$RUNNER_TEMP/notes.md" --latest
+                echo "补充上传成功"
+                exit 0
+              fi
+              gh release delete "$TAG" --yes --cleanup-tag
+            fi
+            sleep 15
+          done
+          echo "发布重试 5 次后仍失败"
+          exit 1
