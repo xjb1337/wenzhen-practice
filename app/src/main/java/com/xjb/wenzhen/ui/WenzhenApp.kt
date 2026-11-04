@@ -1,5 +1,6 @@
 package com.xjb.wenzhen.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -117,7 +118,8 @@ fun WenzhenApp(viewModel: AppViewModel) {
             startDestination = Routes.LIBRARY,
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding),
         ) {
             composable(Routes.LIBRARY) {
                 CaseLibraryScreen(

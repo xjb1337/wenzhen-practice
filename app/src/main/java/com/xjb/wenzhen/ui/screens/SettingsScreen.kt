@@ -1,5 +1,8 @@
 package com.xjb.wenzhen.ui.screens
 
+import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
@@ -133,7 +136,9 @@ fun SettingsScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .imePadding(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 30.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -191,7 +196,7 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                         label = { Text("API Key") },
                         placeholder = { Text("sk-…") },
                         singleLine = true,
@@ -302,7 +307,7 @@ fun SettingsScreen(
                         OutlinedTextField(
                             value = customModel,
                             onValueChange = { customModel = it },
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                             label = { Text("模型名称") },
                             placeholder = { Text("例如 deepseek-chat") },
                             singleLine = true,
@@ -317,7 +322,7 @@ fun SettingsScreen(
                     OutlinedTextField(
                         value = baseUrl,
                         onValueChange = { baseUrl = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                         label = { Text("Base URL") },
                         placeholder = { Text(AppSettings.DEFAULT_BASE_URL) },
                         singleLine = true,
