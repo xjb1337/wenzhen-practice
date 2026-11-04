@@ -491,6 +491,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     initialDiagnosis = diagnosis,
                     treatmentAnswer = treatmentAnswer.trim(),
                     encounterType = state.encounterType,
+                    messages = conversation,
                 )
                 _uiState.update {
                     it.copy(
@@ -722,6 +723,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     initialDiagnosis = entity.initialDiagnosis,
                     treatmentAnswer = entity.treatmentAnswer,
                     encounterType = EncounterType.from(entity.encounterType),
+                    messages = ConversationJsonCodec.decode(entity.conversationJson),
                 )
                 _uiState.update {
                     it.copy(

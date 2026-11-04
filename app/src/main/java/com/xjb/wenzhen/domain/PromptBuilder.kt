@@ -4,6 +4,7 @@ import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.ClinicalRequestType
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
+import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
@@ -145,7 +146,13 @@ class PromptBuilder {
         问诊要点：
         ${medicalCase.keyQuestions.joinToString(separator = "\n") { "- $it" }}
 
-        评分必须客观，以对话中是否真正问到为准，不得因为病例资料写了就视为学生已覆盖。当前类型：${encounterType.label}。${if (encounterType == EncounterType.OUTPATIENT) "门诊不因未问系统回顾、个人史、婚育史、家族史而扣分。" else "住院应评价系统回顾、个人史、婚育史和家族史的完整性。"}
+        评分必须客观，以对话中是否真正问到为准，不得因为病例资料写了就视为学生已覆盖。
+        判定“已覆盖/遗漏”时遵守以下规则，避免误判遗漏：
+        1. 逐条阅读完整对话（每条带编号），不要只看最后几轮。
+        2. 语义等价即算问到：口语化、换说法、反问、一句话里合并问多个问题，都算覆盖对应要点（如“晚上能睡着吗”等价于询问睡眠，“家里人有类似的病吗”等价于家族史）。
+        3. 医生追问后患者已作答，或患者主动交代、医生随后有确认/追问的信息，算已获得；只有对话中完全没有相关问答时才算遗漏。
+        4. 体格检查、化验/影像结果卡片（“系统检查”）属于检查环节，不能替代问诊，但也不要把检查已获得的结果再列为“遗漏的问诊问题”。
+        5. coveredPoints 每条末尾用“（见[编号]）”标注对话证据；missedQuestions 只列出真正没有任何相关问答的问诊要点，并简述该问什么。拿不准时归为已覆盖，在 improvements 里提示问得不够深入。当前类型：${encounterType.label}。${if (encounterType == EncounterType.OUTPATIENT) "门诊不因未问系统回顾、个人史、婚育史、家族史而扣分。" else "住院应评价系统回顾、个人史、婚育史和家族史的完整性。"}
         治疗原则与参考方案：${medicalCase.treatmentPlan.ifBlank { "暂无内置治疗方案" }}
         分项满分：问诊要点覆盖35分，问诊技巧与顺序15分，医患沟通15分，诊断准确20分，治疗方案15分，总分100分。
         诊断准确项应将学生初步诊断与正确诊断比较；学生诊断明显错误或不完整时应明显扣分。
@@ -237,16 +244,23 @@ class PromptBuilder {
         5. 不要虚构医生已经完成的诊疗过程；内容用于教学，避免侵权和真实个人信息。
     """.trimIndent()
 
-    private fun formatTranscript(messages: List<ChatMessage>): String {
-        if (messages.isEmpty()) return "（无对话）"
-        return messages.joinToString(separator = "\n") { message ->
+    /**
+     * 完整对话（不截断），逐条编号，便于评分时引用证据。
+     * 发送失败、患者从未收到的医生消息不计入；检查/化验卡片带上标题。
+     */
+    internal fun formatTranscript(messages: List<ChatMessage>): String {
+        val usable = messages.filterNot {
+            it.role == MessageRole.DOCTOR && it.deliveryState != MessageDeliveryState.SENT
+        }
+        if (usable.isEmpty()) return "（无对话）"
+        return usable.mapIndexed { index, message ->
             val speaker = when (message.role) {
                 MessageRole.DOCTOR -> "医生"
                 MessageRole.PATIENT -> "患者"
-                MessageRole.SYSTEM -> "系统检查"
+                MessageRole.SYSTEM -> "系统检查" + (message.systemTitle?.let { "（$it）" } ?: "")
             }
-            "$speaker：${message.content}"
-        }
+            "[${index + 1}] $speaker：${message.content}"
+        }.joinToString(separator = "\n")
     }
 
     private fun isChild(age: String): Boolean {

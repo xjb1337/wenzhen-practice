@@ -97,8 +97,8 @@ fun SettingsScreen(
     updateState: UpdateUiState = UpdateUiState.Idle,
     onDownloadUpdate: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
-    currentVersionName: String = "1.2.1",
-    currentVersionCode: Int = 4,
+    currentVersionName: String = "1.2.2",
+    currentVersionCode: Int = 5,
     initialGuideExpanded: Boolean = false,
 ) {
     val context = LocalContext.current
