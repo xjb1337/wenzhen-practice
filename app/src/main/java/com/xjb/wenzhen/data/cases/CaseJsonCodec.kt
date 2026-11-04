@@ -34,6 +34,7 @@ object CaseJsonCodec {
         put("keyQuestions", JSONArray(medicalCase.keyQuestions))
         put("correctDiagnosis", medicalCase.correctDiagnosis)
         put("differentialDiagnoses", JSONArray(medicalCase.differentialDiagnoses))
+        put("treatmentPlan", medicalCase.treatmentPlan)
         put("isAiGenerated", medicalCase.isAiGenerated)
     }.toString()
 
@@ -93,6 +94,7 @@ object CaseJsonCodec {
             correctDiagnosis = json.readText("correctDiagnosis", "正确诊断", "诊断"),
             differentialDiagnoses = differentialDiagnoses,
             isAiGenerated = json.optBoolean("isAiGenerated", false),
+            treatmentPlan = json.readText("treatmentPlan", "治疗方案"),
         )
 
         val missing = buildList {

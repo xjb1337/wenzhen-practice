@@ -39,6 +39,7 @@ object SurgeryOrthopedicsCases {
             ),
             correctDiagnosis = "急性结石性胆囊炎",
             differentialDiagnoses = listOf("胆总管结石伴胆管炎", "急性胰腺炎", "消化性溃疡穿孔", "急性肝炎"),
+            treatmentPlan = "治疗原则：禁食、补液解痉，抗感染并尽早手术。\n药物：头孢曲松2g静脉滴注每日1次联合甲硝唑0.5g静脉滴注每8小时1次，连用4至7天；疼痛用间苯三酚40mg静脉注射，必要时重复。\n处理：首选发病72小时内腹腔镜胆囊切除术；手术风险高者行经皮经肝胆囊穿刺引流，缓解后择期手术。\n随访：监测体温、腹痛、白细胞、CRP、肝功能和胆红素，术后观察切口、胆漏及胆管损伤，1周复诊。",
         ),
         MedicalCase(
             id = "surgery-bowel-obstruction",
@@ -72,6 +73,7 @@ object SurgeryOrthopedicsCases {
             ),
             correctDiagnosis = "粘连性小肠梗阻",
             differentialDiagnoses = listOf("结肠肿瘤所致肠梗阻", "嵌顿性腹股沟疝", "麻痹性肠梗阻", "急性胰腺炎"),
+            treatmentPlan = "治疗原则：禁食、胃肠减压、液体复苏，判断有无绞窄并及时手术。\n药物：静脉输注乳酸林格液，维持尿量0.5ml/kg/h以上；呕吐用昂丹司琼4mg静脉注射每8小时1次；疑绞窄或手术时头孢曲松2g静滴每日1次联合甲硝唑0.5g每8小时1次，用至术后24至48小时。\n处理：留置胃管减压，无绞窄先保守24至48小时；出现腹膜刺激征、发热、乳酸升高或保守无效立即剖腹探查。\n随访：监测生命体征、尿量、腹痛、白细胞、乳酸及影像，恢复排气后逐步进食。",
         ),
         MedicalCase(
             id = "ortho-radius-fracture",
@@ -105,6 +107,7 @@ object SurgeryOrthopedicsCases {
             ),
             correctDiagnosis = "右侧桡骨远端骨折（Colles骨折）伴骨质疏松",
             differentialDiagnoses = listOf("桡骨远端粉碎性骨折", "腕舟骨骨折", "尺骨茎突骨折", "腕关节脱位"),
+            treatmentPlan = "治疗原则：复位固定、恢复腕关节功能，并治疗骨质疏松。\n药物：对乙酰氨基酚0.5g口服每6小时1次短期镇痛；碳酸钙0.6g每日2次、维生素D3 800IU每日1次；病情稳定后阿仑膦酸钠70mg每周1次，晨起空腹服，服后30分钟保持直立。\n处理：局麻下手法复位，石膏或夹板固定4至6周；不稳定或关节面移位明显者行切开复位掌侧钢板内固定，早期手指活动。\n随访：复位后1、2、4、6周复查X线及神经血管，监测骨密度和药物不良反应。",
         ),
         MedicalCase(
             id = "ortho-lumbar-disc",
@@ -138,6 +141,7 @@ object SurgeryOrthopedicsCases {
             ),
             correctDiagnosis = "腰椎间盘突出症（L4/5，右侧神经根受压）",
             differentialDiagnoses = listOf("腰椎管狭窄症", "梨状肌综合征", "脊柱结核", "腰椎肿瘤"),
+            treatmentPlan = "治疗原则：以保守治疗为主，缓解神经根炎症和疼痛，识别手术指征。\n药物：塞来昔布200mg口服每日1次，连用1至2周；乙哌立松50mg每日3次，连用1周；甲钴胺0.5mg每日3次，连用4周。\n处理：短期休息不超过2至3天，避免弯腰负重和久坐，行核心肌群训练及物理治疗；若出现进行性肌力下降、马尾综合征或规范保守6至8周无效，考虑椎间盘镜或开放手术。\n随访：每2至4周评估疼痛、直腿抬高和肌力，复查MRI及肝功能，戒烟减重。",
         ),
         MedicalCase(
             id = "ortho-hip-fracture",
@@ -171,6 +175,7 @@ object SurgeryOrthopedicsCases {
             ),
             correctDiagnosis = "右侧股骨颈骨折（Garden III型）",
             differentialDiagnoses = listOf("股骨转子间骨折", "髋关节脱位", "骨盆骨折", "病理性骨折"),
+            treatmentPlan = "治疗原则：镇痛、制动、防治并发症，尽早手术恢复活动。\n药物：术前对乙酰氨基酚1g口服每8小时1次，必要时神经阻滞；头孢唑林2g术前30至60分钟静滴，术后24小时停；术后依诺肝素40mg皮下注射每日1次，用35天；碳酸钙0.6g每日2次和维生素D3 800IU每日1次。\n处理：完善心内科评估，抗血小板药不擅自停用；24至48小时内行人工股骨头置换，早期下床康复。\n随访：监测血红蛋白、下肢静脉血栓、切口和意识，复查X线及骨密度，防跌倒。",
         ),
     )
 }

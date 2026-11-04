@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -61,6 +62,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.update.InstallLaunchResult
 import com.xjb.wenzhen.data.update.UpdateInstaller
 import com.xjb.wenzhen.data.update.UpdateInfo
@@ -76,19 +78,24 @@ import com.xjb.wenzhen.ui.theme.TealSecondary
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
-    onSave: (apiKey: String, model: String, baseUrl: String) -> Unit,
+    onSave: (apiKey: String, model: String, baseUrl: String, thinkingLevel: ThinkingLevel, generateRecord: Boolean) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     saveError: String? = null,
     onDismissError: () -> Unit = {},
-    onTestConnection: (apiKey: String, model: String, baseUrl: String) -> Unit = { _, _, _ -> },
+    onTestConnection: (
+        apiKey: String,
+        model: String,
+        baseUrl: String,
+        thinkingLevel: ThinkingLevel,
+    ) -> Unit = { _, _, _, _ -> },
     connectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     onCheckUpdate: () -> Unit = {},
     updateState: UpdateUiState = UpdateUiState.Idle,
     onDownloadUpdate: () -> Unit = {},
     onDismissUpdate: () -> Unit = {},
-    currentVersionName: String = "1.1.0",
-    currentVersionCode: Int = 2,
+    currentVersionName: String = "1.2.0",
+    currentVersionCode: Int = 3,
     initialGuideExpanded: Boolean = false,
 ) {
     val context = LocalContext.current
@@ -103,6 +110,8 @@ fun SettingsScreen(
     var baseUrl by rememberSaveable { mutableStateOf(settings.baseUrl) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
     var guideExpanded by rememberSaveable { mutableStateOf(initialGuideExpanded) }
+    var thinkingLevel by rememberSaveable { mutableStateOf(settings.thinkingLevel) }
+    var generateRecord by rememberSaveable { mutableStateOf(settings.generateRecord) }
 
     fun selectedModel(): String = when (selectedModelIndex) {
         0 -> AppSettings.MODEL_FLASH
@@ -242,7 +251,7 @@ fun SettingsScreen(
                                 else -> null
                             }
                             if (localError == null) {
-                                onTestConnection(apiKey, model, baseUrl)
+                                onTestConnection(apiKey, model, baseUrl, thinkingLevel)
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -328,6 +337,27 @@ fun SettingsScreen(
             }
 
             item {
+                SettingsSection(title = "思考强度") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThinkingLevel.entries.forEach { level ->
+                            androidx.compose.material3.FilterChip(
+                                selected = thinkingLevel == level,
+                                onClick = { thinkingLevel = level },
+                                label = { Text(level.label) },
+                            )
+                        }
+                    }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("生成病历", style = MaterialTheme.typography.titleSmall)
+                            Text("结束问诊时默认生成病历", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = generateRecord, onCheckedChange = { generateRecord = it })
+                    }
+                }
+            }
+
+            item {
                 Button(
                     onClick = {
                         val model = selectedModel()
@@ -341,7 +371,7 @@ fun SettingsScreen(
                             }
                             else -> {
                                 localError = null
-                                onSave(apiKey, model, baseUrl)
+                                onSave(apiKey, model, baseUrl, thinkingLevel, generateRecord)
                             }
                         }
                     },

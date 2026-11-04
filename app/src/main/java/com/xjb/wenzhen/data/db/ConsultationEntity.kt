@@ -22,4 +22,10 @@ data class ConsultationEntity(
     val createdAt: Long,
     @ColumnInfo(defaultValue = "'COOPERATIVE'")
     val patientPersonality: String = "COOPERATIVE",
+    @ColumnInfo(defaultValue = "'OUTPATIENT'")
+    val encounterType: String = "OUTPATIENT",
+    @ColumnInfo(defaultValue = "''")
+    val treatmentAnswer: String = "",
+    @ColumnInfo(defaultValue = "'INPATIENT'")
+    val recordType: String = "INPATIENT",
 )

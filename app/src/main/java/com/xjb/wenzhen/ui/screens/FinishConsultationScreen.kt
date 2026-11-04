@@ -28,6 +28,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -48,16 +49,20 @@ fun FinishConsultationScreen(
     patientName: String,
     department: String,
     onBack: () -> Unit,
-    onSubmit: (String, String) -> Unit,
+    onSubmit: (String, String, String, Boolean) -> Unit,
     modifier: Modifier = Modifier,
     initialDiagnosis: String = "",
     initialDiagnosisBasis: String = "",
     isSubmitting: Boolean = false,
     errorMessage: String? = null,
     onDismissError: () -> Unit = {},
+    initialTreatment: String = "",
+    initialGenerateRecord: Boolean = false,
 ) {
     var diagnosis by rememberSaveable { mutableStateOf(initialDiagnosis) }
     var basis by rememberSaveable { mutableStateOf(initialDiagnosisBasis) }
+    var treatment by rememberSaveable { mutableStateOf(initialTreatment) }
+    var generateRecord by rememberSaveable { mutableStateOf(initialGenerateRecord) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
 
     Scaffold(
@@ -220,6 +225,26 @@ fun FinishConsultationScreen(
             }
 
             item {
+                Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("治疗方案", style = MaterialTheme.typography.titleMedium)
+                        Text("选填", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
+                    }
+                    OutlinedTextField(value = treatment, onValueChange = { treatment = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("写下治疗原则、药物和随访…") }, minLines = 3, maxLines = 6, shape = RoundedCornerShape(16.dp))
+                }
+            }
+
+            item {
+                Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("生成病历", style = MaterialTheme.typography.titleMedium)
+                        Text("关闭时只评分并反馈", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = generateRecord, onCheckedChange = { generateRecord = it })
+                }
+            }
+
+            item {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
                     shape = RoundedCornerShape(16.dp),
@@ -281,7 +306,7 @@ fun FinishConsultationScreen(
                             localError = "请先填写你的初步诊断。"
                         } else {
                             localError = null
-                            onSubmit(diagnosis.trim(), basis.trim())
+                            onSubmit(diagnosis.trim(), basis.trim(), treatment.trim(), generateRecord)
                         }
                     },
                     modifier = Modifier
@@ -303,7 +328,7 @@ fun FinishConsultationScreen(
                             modifier = Modifier.size(20.dp),
                         )
                         Text(
-                            text = "生成病历并评分",
+                            text = if (generateRecord) "生成病历并评分" else "提交评分",
                             modifier = Modifier.padding(start = 8.dp),
                             fontWeight = FontWeight.SemiBold,
                         )

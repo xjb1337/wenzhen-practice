@@ -50,6 +50,7 @@ class BuiltInCasesTest {
             assertTrue("${prefix}问诊要点不能为空", medicalCase.keyQuestions.all { it.isNotBlank() })
             assertTrue("${prefix}鉴别诊断不能为空", medicalCase.differentialDiagnoses.isNotEmpty())
             assertTrue("${prefix}鉴别诊断不能为空字符串", medicalCase.differentialDiagnoses.all { it.isNotBlank() })
+            assertTrue("${prefix}治疗方案为空", medicalCase.treatmentPlan.isNotBlank())
             assertFalse("${prefix}标题不应直接包含诊断", medicalCase.title.contains(medicalCase.correctDiagnosis))
         }
     }

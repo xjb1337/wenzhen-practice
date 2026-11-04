@@ -10,6 +10,7 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.PatientPersonality
+import com.xjb.wenzhen.data.model.EncounterType
 
 class PatientChatService(
     private val llmClient: LlmClient,
@@ -20,8 +21,9 @@ class PatientChatService(
         medicalCase: MedicalCase,
         messages: List<ChatMessage>,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
     ): String {
-        val apiMessages = buildPatientMessages(medicalCase, messages, personality)
+        val apiMessages = buildPatientMessages(medicalCase, messages, personality, encounterType)
         return llmClient.complete(
             config = config,
             messages = apiMessages,
@@ -35,11 +37,12 @@ class PatientChatService(
         medicalCase: MedicalCase,
         messages: List<ChatMessage>,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
         onDelta: suspend (String) -> Unit,
     ): String {
         return llmClient.stream(
             config = config,
-            messages = buildPatientMessages(medicalCase, messages, personality),
+            messages = buildPatientMessages(medicalCase, messages, personality, encounterType),
             temperature = 0.8,
             onDelta = onDelta,
         ).trim()
@@ -49,8 +52,9 @@ class PatientChatService(
         medicalCase: MedicalCase,
         messages: List<ChatMessage>,
         personality: PatientPersonality,
+        encounterType: EncounterType,
     ): List<LlmMessage> = buildList {
-        add(LlmMessage("system", promptBuilder.buildPatientPrompt(medicalCase, personality)))
+        add(LlmMessage("system", promptBuilder.buildPatientPrompt(medicalCase, personality, encounterType)))
         messages.filter { it.role != MessageRole.SYSTEM }.forEach { message ->
             add(
                 LlmMessage(
@@ -101,20 +105,28 @@ class MedicalRecordService(
         messages: List<ChatMessage>,
         initialDiagnosis: String,
         diagnosisBasis: String,
+        encounterType: EncounterType = EncounterType.INPATIENT,
+        treatmentAnswer: String = "",
     ): String {
         val raw = llmClient.complete(
             config = config,
             messages = listOf(
-                LlmMessage("system", promptBuilder.buildRecordSystemPrompt(medicalCase)),
+                LlmMessage("system", promptBuilder.buildRecordSystemPrompt(medicalCase, encounterType)),
                 LlmMessage(
                     "user",
-                    promptBuilder.buildRecordUserPrompt(messages, initialDiagnosis, diagnosisBasis),
+                    promptBuilder.buildRecordUserPrompt(
+                        messages = messages,
+                        initialDiagnosis = initialDiagnosis,
+                        diagnosisBasis = diagnosisBasis,
+                        encounterType = encounterType,
+                        treatmentAnswer = treatmentAnswer,
+                    ),
                 ),
             ),
             jsonMode = false,
             temperature = 0.2,
         )
-        return RecordParser.parse(raw, initialDiagnosis)
+        return RecordParser.parse(raw, initialDiagnosis, encounterType, treatmentAnswer)
     }
 }
 
@@ -128,14 +140,16 @@ class ScoreService(
         messages: List<ChatMessage>,
         initialDiagnosis: String,
         diagnosisBasis: String,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
+        treatmentAnswer: String = "",
     ): ScoreResult {
         val raw = llmClient.complete(
             config = config,
             messages = listOf(
-                LlmMessage("system", promptBuilder.buildScoreSystemPrompt(medicalCase)),
+                LlmMessage("system", promptBuilder.buildScoreSystemPrompt(medicalCase, encounterType)),
                 LlmMessage(
                     "user",
-                    promptBuilder.buildScoreUserPrompt(messages, initialDiagnosis, diagnosisBasis),
+                    promptBuilder.buildScoreUserPrompt(messages, initialDiagnosis, diagnosisBasis, treatmentAnswer, encounterType),
                 ),
             ),
             jsonMode = true,
@@ -156,19 +170,26 @@ class CaseGenerationService(
         config: LlmConfig,
         department: String,
         difficulty: Difficulty,
-    ): MedicalCase {
+        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+    ): Pair<MedicalCase, PatientPersonality> {
         val raw = llmClient.complete(
             config = config,
             messages = listOf(
                 LlmMessage(
                     "system",
-                    promptBuilder.buildCaseGenerationPrompt(department, difficulty),
+                    promptBuilder.buildCaseGenerationPrompt(department, difficulty, personality),
                 ),
                 LlmMessage("user", "请按要求生成这个$department、${difficulty.label}难度的教学病例，只输出 JSON。"),
             ),
             jsonMode = true,
             temperature = 0.9,
         )
-        return CaseJsonCodec.parseGenerated(raw, department, difficulty)
+        val medicalCase = CaseJsonCodec.parseGenerated(raw, department, difficulty)
+        val finalPersonality = if (personality.availableFor(medicalCase.patient.age)) {
+            personality
+        } else {
+            PatientPersonality.COOPERATIVE
+        }
+        return medicalCase to finalPersonality
     }
 }

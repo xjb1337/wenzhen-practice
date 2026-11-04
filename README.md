@@ -2,35 +2,37 @@
 
 一个面向中国医学生的原生 Android 问诊训练应用。使用 Kotlin、Jetpack Compose 与 Material3 构建，包名为 `com.xjb.wenzhen`。应用通过标准化病人病例模拟问诊，在结束对话后生成规范大病历并提供结构化点评。
 
-当前版本为 v1.1，`versionCode` 为 2。
+当前版本为 v1.2，`versionCode` 为 3。
 
 ## 功能
 
 - **内置病例库**：包含至少 30 个标准化病人病例，覆盖心内、呼吸、消化、神经、内分泌、肾内、血液、风湿免疫、感染、普外、骨科、泌尿、妇产、儿科、精神心理、耳鼻喉、眼科和皮肤科。病例包含患者一般信息、开场白、隐藏病史与检查资料、10–15 条问诊要点、正确诊断及鉴别诊断。
 - **患者性格**：开始问诊或生成 AI 病例前，可选择配合、焦虑、表达不清、老年人（听力差、啰嗦）、不耐烦、隐瞒（需追问才说）六种沟通设定，并写入病人提示词。
 - **流式患者回复**：DeepSeek 请求使用 `stream=true`，客户端逐行解析 SSE，患者回复在对话中逐步显示；同时保留非流式测试替身和错误处理。
-- **问诊提示与计时**：对话页顶部显示 `mm:ss` 计时器，并可展开问诊覆盖提示。`CoverageAnalyzer` 根据医生提问关键词，标出主诉、现病史、既往史、个人史、婚育史、家族史和系统回顾中尚未问及的部分。
+- **问诊提示与计时**：对话页顶部显示 `mm:ss` 计时器，并可展开问诊覆盖提示。`CoverageAnalyzer` 按门诊/住院类型区分覆盖项：门诊统计主诉、现病史和既往/过敏/用药；住院额外统计个人史、婚育史、女性 12–55 岁的月经史、家族史和系统回顾。
 - **查体与检查**：对话页提供「查体」「化验/检查」入口，可选择推荐项目或自行输入。AI 依据病例隐藏资料返回一致结果，病例未列出的项目会生成与诊断和病情相符的合理结果，并以系统卡片插入对话。
 - **失败重试**：医生消息发送失败后可在原对话中点击「重试」，无需重新开始问诊。
 - **病例库筛选与 AI 生成**：支持按全部科室筛选并展示加载、空列表和错误状态；可选择科室、难度和患者性格，让 DeepSeek 生成同结构的 JSON 病例。
-- **结束问诊**：填写初步诊断和可选的诊断依据后，同时生成大病历与评分。未问及的内容统一写为“未问及”，系统回顾强制位于体格检查之后。
+- **结束问诊**：填写初步诊断、诊断依据和治疗方案后，可同时生成门诊/住院病历与评分。治疗内容以学生填写为准，门诊写入“处理意见”、住院写入“诊疗计划”，未填写时写“未填写”。
 - **结果页**：包含「病历」和「点评」两个 Tab，展示总分、分项、已覆盖要点、遗漏问题、优点、改进建议、正确诊断及解析；支持复制与系统分享。
 - **成绩统计**：历史成绩趋势、各科室平均分、最常遗漏问诊要点 Top 10；统计由纯函数 `StatsCalculator` 计算，并可从底部导航进入。
 - **设置页引导**：可折叠展示获取 DeepSeek API Key 的完整步骤，并提供打开 `platform.deepseek.com` 的按钮。
 - **测试连接**：保存 Key 后可发送 `max_tokens=1` 的最小请求，区分成功、401/403 Key 无效、402 余额不足、429 限流、网络错误、超时和服务端异常等中文提示。
 - **应用内更新**：从 GitHub Releases 的 `update.json` 检查版本，展示更新说明；下载 APK 后校验 SHA-256 与签名证书，再通过 FileProvider 和系统安装器安装。未授权未知来源时会跳转系统设置。
 - **历史记录**：使用 Room 保存病例、性格、对话、病历、评分和时间；历史列表可进入详情回看。
-- **本地设置**：保存 DeepSeek API Key、模型及 Base URL。默认模型为 `deepseek-v4-flash`，也可选择 `deepseek-v4-pro` 或填写自定义模型名。
+- **本地设置**：保存 DeepSeek API Key、模型、Base URL、思考强度和默认病历生成开关。默认模型为 `deepseek-flash`，旧 `deepseek-v4-flash` 会自动迁移；也可选择 `deepseek-v4-pro` 或填写自定义模型名。
 
 ## 数据库迁移
 
-Room 数据库已从 v1 升级至 v2，新增 `patientPersonality` 列并提供带默认值的 `MIGRATION_1_2`：
+Room 数据库已升级至 v3。`MIGRATION_1_2` 新增 `patientPersonality`：
 
 ```sql
 ALTER TABLE consultations ADD COLUMN patientPersonality TEXT NOT NULL DEFAULT 'COOPERATIVE'
 ```
 
 应用已注册该 Migration，未使用 `fallbackToDestructiveMigration`，已有历史记录会保留。
+
+`MIGRATION_2_3` 继续以增量加列方式新增 `encounterType`、`treatmentAnswer` 和 `recordType`，三者均带默认值，不重建或清空旧表。
 
 ## 应用内更新
 
@@ -95,16 +97,19 @@ app/build/outputs/apk/debug/app-debug.apk
 
 单元测试覆盖：
 
-- `PromptBuilderTest`：患者提示词包含隐藏资料并禁止泄露诊断；病历、查体/检查和评分提示词约束。
+- `PromptBuilderTest`：患者提示词包含隐藏资料并禁止泄露诊断；门诊/住院病历与评分提示词区分；学生治疗方案写入病历提示。
 - `ScoreParserTest`：正常 JSON、Markdown 围栏 JSON、损坏 JSON 与分项上限。
 - `MedicalRecordServiceTest`：`FakeLlmClient` 实现同步流式回调，验证患者流式回复和病历系统回顾顺序。
-- `SseParserTest`：空行、注释、delta、`[DONE]` 和损坏 JSON。
+- `SseParserTest`：空行、注释、delta、忽略 `reasoning_content`、`[DONE]` 和损坏 JSON。
+- `DeepSeekClientTest`：验证 OFF/LOW/MAX 思考等级对应的请求 payload。
+- `SettingsRepositoryTest`：验证旧模型名迁移和默认模型回退。
 - `UpdateInfoTest`：更新清单字段解析、非法哈希/地址拒绝和版本比较。
-- `CoverageAnalyzerTest`：七项问诊覆盖和患者回答不计入医生提问。
+- `CoverageAnalyzerTest`：门诊/住院覆盖差异、月经史适用年龄和患者回答不计入医生提问。
 - `StatsCalculatorTest`：趋势、科室均分、Top 10 遗漏和空数据。
-- `PatientPersonalityTest`：六种性格均写入病人提示词。
-- `BuiltInCasesTest`：至少 30 个病例、全部科室覆盖和字段完整性。
-- `MigrationSqlTest`：Room v1→v2 迁移 SQL 与版本注册。
+- `PatientPersonalityTest`：六种性格均写入病人提示词，并验证年龄可用性约束。
+- `BuiltInCasesTest`：至少 30 个病例、全部科室覆盖、字段完整性和治疗方案非空。
+- `RecordParserTest`：门诊/住院病历小节及学生治疗内容校验。
+- `MigrationSqlTest`：Room v1→v2、v2→v3 迁移 SQL 与版本注册。
 - `ScreenshotTest`：Robolectric 34 + Roborazzi 页面截图，含设置引导、连接成功、覆盖提示、查体卡片、统计页和更新对话框。
 
 ## 项目结构

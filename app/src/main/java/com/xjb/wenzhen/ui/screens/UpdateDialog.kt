@@ -23,6 +23,13 @@ import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.theme.TealContainer
 
+fun cleanUpdateNotes(notes: String): String = notes.lineSequence().joinToString("\n") { raw ->
+    raw.trimStart()
+        .replace(Regex("^#{1,6}\\s*"), "")
+        .replace("**", "")
+        .replace(Regex("^-\\s*"), "• ")
+}.trim()
+
 @Composable
 fun UpdateDialog(
     update: UpdateInfo,
@@ -67,7 +74,7 @@ fun UpdateDialog(
                 }
                 Text("更新说明", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = update.notes.ifBlank { "本版本包含体验优化与问题修复。" },
+                    text = cleanUpdateNotes(update.notes).ifBlank { "本版本包含体验优化与问题修复。" },
                     style = MaterialTheme.typography.bodyMedium,
                 )
                 if (downloading) {

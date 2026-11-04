@@ -12,8 +12,8 @@ class ScoreParserTest {
               "totalScore": 85,
               "breakdown": {
                 "questioningCoverage": 34,
-                "techniqueAndOrder": 17,
-                "communication": 18,
+                "techniqueAndOrder": 14,
+                "communication": 14,
                 "diagnosisAccuracy": 16
               },
               "coveredPoints": ["问到了起病时间", "问到了伴随症状"],
@@ -29,8 +29,8 @@ class ScoreParserTest {
 
         assertEquals(85, result.totalScore)
         assertEquals(34, result.coverageScore)
-        assertEquals(17, result.techniqueScore)
-        assertEquals(18, result.communicationScore)
+        assertEquals(14, result.techniqueScore)
+        assertEquals(14, result.communicationScore)
         assertEquals(16, result.diagnosisScore)
         assertEquals(listOf("问到了起病时间", "问到了伴随症状"), result.coveredPoints)
         assertEquals(listOf("未询问吸烟史"), result.missedQuestions)
@@ -47,7 +47,7 @@ class ScoreParserTest {
               "breakdown": {
                 "questioningCoverage": 30,
                 "techniqueAndOrder": 14,
-                "communication": 16,
+                "communication": 15,
                 "diagnosisAccuracy": 12
               },
               "coveredPoints": ["询问了现病史"],
@@ -85,15 +85,28 @@ class ScoreParserTest {
                 "questioningCoverage": 50,
                 "techniqueAndOrder": 25,
                 "communication": 18,
-                "diagnosisAccuracy": 16
+                "diagnosisAccuracy": 16,
+                "treatment": 99
               }
             }
         """.trimIndent()
 
         val result = ScoreParser.parse(raw)
 
-        assertEquals(40, result.coverageScore)
-        assertEquals(20, result.techniqueScore)
-        assertEquals(94, result.totalScore)
+        assertEquals(35, result.coverageScore)
+        assertEquals(15, result.techniqueScore)
+        assertEquals(15, result.treatmentScore)
+        assertEquals(96, result.totalScore)
+    }
+
+    @Test
+    fun `旧版无治疗分项的记录沿用旧满分不截断`() {
+        val raw = """{"totalScore": 92, "breakdown": {"questioningCoverage": 38, "techniqueAndOrder": 18, "communication": 18, "diagnosisAccuracy": 18}}"""
+        val result = ScoreParser.parse(raw)
+        assertEquals(true, result.isLegacy)
+        assertEquals(38, result.coverageScore)
+        assertEquals(18, result.techniqueScore)
+        assertEquals(40, result.coverageMax)
+        assertEquals(92, result.totalScore)
     }
 }

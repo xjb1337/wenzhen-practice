@@ -18,7 +18,13 @@ data class ScoreResult(
     val improvements: List<String>,
     val correctDiagnosis: String,
     val diagnosisExplanation: String,
+    val treatmentScore: Int = 0,
+    val isLegacy: Boolean = false,
 ) {
+    val coverageMax: Int get() = if (isLegacy) 40 else 35
+    val techniqueMax: Int get() = if (isLegacy) 20 else 15
+    val communicationMax: Int get() = if (isLegacy) 20 else 15
+
     val gradeLabel: String
         get() = when {
             totalScore >= 90 -> "优秀"
@@ -52,17 +58,23 @@ object ScoreParser {
             breakdown,
             "diagnosisAccuracy", "diagnosis", "诊断准确", "诊断准确分数",
         ) ?: findScore(json, "诊断准确分数")
+        val treatment = findScore(
+            breakdown, "treatment", "treatmentPlan", "治疗", "治疗方案", "治疗评分",
+        ) ?: findScore(json, "治疗评分")
 
         val explicitTotal = findScore(json, "totalScore", "total", "总分")
-        if (explicitTotal == null && listOf(coverage, technique, communication, diagnosis).all { it == null }) {
+        if (explicitTotal == null && listOf(coverage, technique, communication, diagnosis, treatment).all { it == null }) {
             throw ScoreParseException("评分 JSON 缺少总分和分项分数，请重试。")
         }
 
-        val coverageValue = (coverage ?: 0).coerceIn(0, 40)
-        val techniqueValue = (technique ?: 0).coerceIn(0, 20)
-        val communicationValue = (communication ?: 0).coerceIn(0, 20)
+        // v1.1 及以前的记录没有治疗分项，沿用旧满分 40/20/20/20，避免历史分数被截断。
+        val legacy = treatment == null
+        val coverageValue = (coverage ?: 0).coerceIn(0, if (legacy) 40 else 35)
+        val techniqueValue = (technique ?: 0).coerceIn(0, if (legacy) 20 else 15)
+        val communicationValue = (communication ?: 0).coerceIn(0, if (legacy) 20 else 15)
         val diagnosisValue = (diagnosis ?: 0).coerceIn(0, 20)
-        val computedTotal = coverageValue + techniqueValue + communicationValue + diagnosisValue
+        val treatmentValue = (treatment ?: 0).coerceIn(0, 15)
+        val computedTotal = coverageValue + techniqueValue + communicationValue + diagnosisValue + treatmentValue
         val total = (explicitTotal ?: computedTotal).coerceIn(0, 100)
 
         return ScoreResult(
@@ -84,6 +96,8 @@ object ScoreParser {
                 "diagnosisExplanation", "correctDiagnosisExplanation", "diagnosisAnalysis",
                 "正确诊断解析", "诊断解析",
             ),
+            treatmentScore = treatmentValue,
+            isLegacy = legacy,
         )
     }
 
@@ -94,6 +108,7 @@ object ScoreParser {
             put("techniqueAndOrder", score.techniqueScore)
             put("communication", score.communicationScore)
             put("diagnosisAccuracy", score.diagnosisScore)
+            put("treatment", score.treatmentScore)
         })
         put("coveredPoints", JSONArray(score.coveredPoints))
         put("missedQuestions", JSONArray(score.missedQuestions))
