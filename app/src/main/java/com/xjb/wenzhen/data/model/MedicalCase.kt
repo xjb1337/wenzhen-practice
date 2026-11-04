@@ -46,7 +46,16 @@ enum class PatientPersonality(
         label = "隐瞒（需追问才说）",
         description = "对敏感信息有所保留",
         promptInstruction = "你对吸烟、饮酒、性生活、用药或家族史等敏感信息有所隐瞒，首次被问时轻描淡写或说“没有”；医生具体、温和地追问后，才逐步说出部分实情。",
-    ),
+    );
+
+    fun availableFor(age: String): Boolean {
+        val number = Regex("\\d+").find(age)?.value?.toIntOrNull()
+        return when (this) {
+            ELDERLY -> number != null && number >= 60
+            IMPATIENT -> number == null || number >= 14
+            else -> true
+        }
+    }
 }
 
 data class PatientInfo(
@@ -76,6 +85,7 @@ data class MedicalCase(
     val correctDiagnosis: String,
     val differentialDiagnoses: List<String>,
     val isAiGenerated: Boolean = false,
+    val treatmentPlan: String = "",
 ) {
     val patientSummary: String
         get() = "${patient.name} · ${patient.gender} · ${patient.age} · ${patient.occupation}"

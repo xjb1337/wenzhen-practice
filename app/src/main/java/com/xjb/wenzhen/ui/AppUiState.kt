@@ -6,6 +6,7 @@ import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.PatientPersonality
+import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.domain.ScoreResult
 import com.xjb.wenzhen.domain.ScoreParser
@@ -23,6 +24,8 @@ data class ResultViewData(
     val medicalRecord: String,
     val score: ScoreResult,
     val initialDiagnosis: String,
+    val treatmentAnswer: String = "",
+    val encounterType: EncounterType = EncounterType.OUTPATIENT,
 )
 
 data class AppUiState(
@@ -33,6 +36,7 @@ data class AppUiState(
     val settings: AppSettings = AppSettings(),
     val activeCase: MedicalCase? = null,
     val patientPersonality: PatientPersonality = PatientPersonality.COOPERATIVE,
+    val encounterType: EncounterType = EncounterType.OUTPATIENT,
     val consultationStartedAt: Long? = null,
     val messages: List<ChatMessage> = emptyList(),
     val isPatientTyping: Boolean = false,

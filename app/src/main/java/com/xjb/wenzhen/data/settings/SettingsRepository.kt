@@ -4,6 +4,16 @@ import android.content.Context
 import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
+import com.xjb.wenzhen.data.model.ThinkingLevel
+
+internal fun normalizeModel(name: String?): String {
+    val normalized = name?.trim().orEmpty()
+    return when {
+        normalized.isBlank() -> AppSettings.MODEL_FLASH
+        normalized.equals("deepseek-v4-flash", ignoreCase = true) -> AppSettings.MODEL_FLASH
+        else -> normalized
+    }
+}
 
 class SettingsRepository(context: Context) {
     private val appContext = context.applicationContext
@@ -25,12 +35,12 @@ class SettingsRepository(context: Context) {
         return runCatching {
             AppSettings(
                 apiKey = prefs.getString(KEY_API_KEY, "").orEmpty(),
-                model = prefs.getString(KEY_MODEL, AppSettings.MODEL_FLASH)
-                    .orEmpty()
-                    .ifBlank { AppSettings.MODEL_FLASH },
+                model = normalizeModel(prefs.getString(KEY_MODEL, AppSettings.MODEL_FLASH)),
                 baseUrl = prefs.getString(KEY_BASE_URL, AppSettings.DEFAULT_BASE_URL)
                     .orEmpty()
                     .ifBlank { AppSettings.DEFAULT_BASE_URL },
+                thinkingLevel = ThinkingLevel.from(prefs.getString(KEY_THINKING_LEVEL, null)),
+                generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
             )
         }.getOrDefault(AppSettings())
     }
@@ -42,8 +52,10 @@ class SettingsRepository(context: Context) {
             .putString(KEY_API_KEY, settings.apiKey.trim())
             .putString(
                 KEY_MODEL,
-                settings.model.trim().ifBlank { AppSettings.MODEL_FLASH },
+                normalizeModel(settings.model),
             )
+            .putString(KEY_THINKING_LEVEL, settings.thinkingLevel.name)
+            .putBoolean(KEY_GENERATE_RECORD, settings.generateRecord)
             .putString(
                 KEY_BASE_URL,
                 settings.baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL },
@@ -59,5 +71,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_API_KEY = "deepseek_api_key"
         private const val KEY_MODEL = "deepseek_model"
         private const val KEY_BASE_URL = "deepseek_base_url"
+        private const val KEY_THINKING_LEVEL = "thinking_level"
+        private const val KEY_GENERATE_RECORD = "generate_record"
     }
 }

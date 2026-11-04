@@ -53,6 +53,7 @@ import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.PatientPersonality
+import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.DifficultyBadge
 import com.xjb.wenzhen.ui.components.EmptyState
@@ -71,7 +72,7 @@ fun CaseLibraryScreen(
     hasApiKey: Boolean,
     builtInCount: Int,
     onDepartmentSelected: (String) -> Unit = {},
-    onCaseSelected: (MedicalCase, PatientPersonality) -> Unit = { _, _ -> },
+    onCaseSelected: (MedicalCase, PatientPersonality, EncounterType) -> Unit = { _, _, _ -> },
     onGenerateCase: (String, Difficulty, PatientPersonality) -> Unit = { _, _, _ -> },
     onOpenSettings: () -> Unit = {},
     onClearGenerationError: () -> Unit = {},
@@ -190,9 +191,9 @@ fun CaseLibraryScreen(
         PersonalityPickerDialog(
             medicalCase = personalityCase,
             onDismiss = { personalityCaseId = null },
-            onConfirm = { personality ->
+            onConfirm = { personality, encounterType ->
                 personalityCaseId = null
-                onCaseSelected(personalityCase, personality)
+                onCaseSelected(personalityCase, personality, encounterType)
             },
         )
     }
@@ -570,15 +571,16 @@ private fun GenerateCaseDialog(
 }
 
 @Composable
-private fun PersonalityPickerDialog(
+internal fun PersonalityPickerDialog(
     medicalCase: MedicalCase,
     onDismiss: () -> Unit,
-    onConfirm: (PatientPersonality) -> Unit,
+    onConfirm: (PatientPersonality, EncounterType) -> Unit,
 ) {
     var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
+    var encounterType by rememberSaveable { mutableStateOf(EncounterType.OUTPATIENT) }
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text("选择患者性格") },
+        title = { Text("开始问诊") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
                 Text(
@@ -587,13 +589,27 @@ private fun PersonalityPickerDialog(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 PersonalitySelector(
+                    age = medicalCase.patient.age,
                     selected = personality,
                     onSelected = { personality = it },
                 )
+                Text("就诊类型", style = MaterialTheme.typography.titleSmall)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    EncounterType.entries.forEach { type ->
+                        FilterChip(
+                            selected = encounterType == type,
+                            onClick = { encounterType = type },
+                            label = { Text(type.label) },
+                        )
+                    }
+                }
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(personality) }) {
+            Button(onClick = {
+                val safePersonality = if (personality.availableFor(medicalCase.patient.age)) personality else PatientPersonality.COOPERATIVE
+                onConfirm(safePersonality, encounterType)
+            }) {
                 Text("开始问诊")
             }
         },
@@ -607,12 +623,13 @@ private fun PersonalityPickerDialog(
 
 @Composable
 private fun PersonalitySelector(
+    age: String? = null,
     selected: PatientPersonality,
     onSelected: (PatientPersonality) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("患者性格", style = MaterialTheme.typography.titleSmall)
-        PatientPersonality.entries.chunked(2).forEach { rowItems ->
+        PatientPersonality.entries.filter { age == null || it.availableFor(age) }.chunked(2).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),

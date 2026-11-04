@@ -39,6 +39,7 @@ object RheumatologyInfectionCases {
             ),
             correctDiagnosis = "类风湿关节炎",
             differentialDiagnoses = listOf("系统性红斑狼疮", "银屑病关节炎", "骨关节炎", "痛风性关节炎"),
+            treatmentPlan = "治疗原则：早期达标治疗，控制炎症、保护关节功能。\n药物：甲氨蝶呤10至15mg每周1次口服或皮下注射，联合叶酸5mg每周1次并避开当日；羟氯喹200mg口服每日2次；疼痛短期用塞来昔布200mg每日1次，泼尼松10mg每日1次桥接4至8周后减量。\n处理：关节保护、适度锻炼、戒烟和物理治疗，避免劳累。\n随访：每4至8周评估DAS28、血常规、肝肾功能和ESR/CRP，监测感染、口腔溃疡及视网膜毒性，达标后逐渐减药。",
         ),
         MedicalCase(
             id = "rheum-sle",
@@ -72,6 +73,7 @@ object RheumatologyInfectionCases {
             ),
             correctDiagnosis = "系统性红斑狼疮（伴狼疮性肾炎可能）",
             differentialDiagnoses = listOf("皮肌炎", "类风湿关节炎", "混合性结缔组织病", "药物性狼疮"),
+            treatmentPlan = "治疗原则：抑制免疫炎症、保护脏器，狼疮性肾炎需病理分型治疗。\n药物：羟氯喹200mg口服每日2次；泼尼松0.5至1mg/kg每日1次；蛋白尿明显时联合吗替麦考酚酯0.75至1g每日2次，或环磷酰胺0.5至1g/m2静脉每月1次，共6个月。\n处理：严格防晒、避孕，控制血压，肾活检明确病理，避免感染。\n随访：每月查尿蛋白、肌酐、补体、抗dsDNA和血常规，监测感染、骨髓抑制、血糖及眼底，稳定后长期维持。",
         ),
         MedicalCase(
             id = "infect-brucellosis",
@@ -105,6 +107,7 @@ object RheumatologyInfectionCases {
             ),
             correctDiagnosis = "布鲁菌病",
             differentialDiagnoses = listOf("结核病", "感染性心内膜炎", "风湿热", "病毒性肝炎"),
+            treatmentPlan = "治疗原则：联合、足量、足疗程抗菌，防止复发和慢性化。\n药物：多西环素100mg口服每日2次联合利福平600mg口服每日1次，疗程6周；或改用多西环素联合链霉素1g肌内注射每日1次，连用2至3周。\n处理：卧床休息、退热补液，避免生奶和未熟肉，职业接触时戴手套口罩，治疗期间戒酒。\n随访：每2周查体温、血常规、肝肾功能和血培养，停药后3至6个月复查，警惕复发、肝炎和关节损害。",
         ),
         MedicalCase(
             id = "infect-pulmonary-tb",
@@ -138,6 +141,7 @@ object RheumatologyInfectionCases {
             ),
             correctDiagnosis = "继发性肺结核（右上肺，伴空洞）",
             differentialDiagnoses = listOf("细菌性肺炎", "肺脓肿", "肺癌", "非结核分枝杆菌感染"),
+            treatmentPlan = "治疗原则：早期、联合、适量、规律、全程抗结核，并隔离和营养支持。\n药物：异烟肼300mg、利福平600mg、吡嗪酰胺1.5g、乙胺丁醇0.75g，均每日1次口服，强化2个月；随后异烟肼300mg加利福平600mg每日1次，继续4个月，空洞或痰菌未阴转者延长至9个月。\n处理：呼吸道隔离至痰菌阴性，通风、戴口罩，加强营养，接触者筛查。\n随访：每月查痰涂片和培养、肝肾功能、视力，复查胸片，监测药物性肝损伤、痛风和高尿酸。",
         ),
         MedicalCase(
             id = "infect-dysentery",
@@ -171,6 +175,7 @@ object RheumatologyInfectionCases {
             ),
             correctDiagnosis = "急性细菌性痢疾",
             differentialDiagnoses = listOf("急性胃肠炎", "溃疡性结肠炎", "阿米巴痢疾", "肠套叠"),
+            treatmentPlan = "治疗原则：消化道隔离、补液纠正脱水，合理抗菌和对症。\n药物：头孢曲松2g静脉滴注每日1次，连用3至5天；脱水予口服补液盐或静脉输注乳酸林格液，高热用对乙酰氨基酚0.5g口服每6小时1次。\n处理：卧床休息、清淡饮食，勤洗手，餐具消毒，避免使用洛哌丁胺等止泻药；按传染病规定报告。\n随访：监测体温、腹泻次数、尿量、电解质和大便常规，症状消失后复查大便培养，出现血便加重或意识改变及时复诊。",
         ),
     )
 }

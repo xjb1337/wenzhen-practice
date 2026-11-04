@@ -39,6 +39,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "急性ST段抬高型心肌梗死（前壁）",
             differentialDiagnoses = listOf("主动脉夹层", "肺栓塞", "不稳定型心绞痛", "自发性气胸"),
+            treatmentPlan = "治疗原则：立即再灌注并抗栓、抗缺血，争分夺秒。\n药物：阿司匹林300mg嚼服，替格瑞洛180mg或氯吡格雷300mg负荷，阿托伐他汀40mg，依诺肝素1mg/kg皮下注射每12小时1次；无禁忌时加美托洛尔25mg口服每日2次。\n处理：心电监护、吸氧，尽快直接PCI，不能及时PCI则溶栓；疼痛剧烈可用吗啡。\n随访：监测心电图、肌钙蛋白、心功能及出血，双联抗血小板12个月，他汀长期使用。",
         ),
         MedicalCase(
             id = "gastro-appendicitis",
@@ -72,6 +73,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "急性阑尾炎",
             differentialDiagnoses = listOf("急性胃肠炎", "右侧输尿管结石", "妇科急腹症", "克罗恩病"),
+            treatmentPlan = "治疗原则：禁食、补液并尽早手术，围术期抗感染。\n药物：头孢曲松2g静脉滴注每日1次联合甲硝唑0.5g静脉滴注每8小时1次，术前开始，术后用至体温正常、白细胞恢复，一般3至5天。\n处理：首选腹腔镜阑尾切除术，术中冲洗引流；疼痛可用对乙酰氨基酚0.5g口服每6小时1次。\n随访：监测体温、腹痛、切口及血常规，术后早期下床，1周复诊，警惕腹腔脓肿和肠梗阻。",
         ),
         MedicalCase(
             id = "resp-pneumonia",
@@ -105,6 +107,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "社区获得性肺炎（右下肺）",
             differentialDiagnoses = listOf("支气管炎", "肺结核", "肺栓塞", "支气管扩张伴感染"),
+            treatmentPlan = "治疗原则：抗感染、氧疗及支持对症，评估住院指征。\n药物：头孢曲松2g静脉滴注每日1次，联合阿奇霉素0.5g每日1次连用3天；总疗程5至7天，重症或吸收差可延至10天。\n处理：卧床休息、补液，SpO2低于94%时吸氧，高热用对乙酰氨基酚0.5g口服每6小时1次。\n随访：监测体温、呼吸、SpO2、血常规及CRP，复查胸片或CT，2至4周评估吸收，警惕脓胸和败血症。",
         ),
         MedicalCase(
             id = "neuro-sah",
@@ -138,6 +141,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "蛛网膜下腔出血",
             differentialDiagnoses = listOf("偏头痛", "颅内感染", "高血压脑病", "脑出血"),
+            treatmentPlan = "治疗原则：急诊监护、防止再出血和控制颅压，尽快处理动脉瘤。\n药物：尼莫地平60mg口服每4小时1次，连用21天；血压高时拉贝洛尔10mg静脉推注后以1至4mg/min泵入，维持收缩压160mmHg以下；颅压增高用20%甘露醇125ml快速静滴每6至8小时1次。\n处理：绝对卧床、镇痛镇静、通便，急诊CTA或DSA后行介入栓塞或开颅夹闭。\n随访：监测意识、瞳孔、再出血、脑积水、血管痉挛及血钠，复查CT和血管影像。",
         ),
         MedicalCase(
             id = "endocrine-diabetes",
@@ -171,6 +175,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "2型糖尿病",
             differentialDiagnoses = listOf("1型糖尿病", "甲状腺功能亢进", "尿崩症", "应激性高血糖"),
+            treatmentPlan = "治疗原则：生活方式干预为基础，个体化降糖并防治并发症。\n药物：二甲双胍0.5g餐后口服每日2次，逐渐加至1.0g每日2次；同时甘精胰岛素0.1至0.2U/kg睡前皮下注射，按空腹血糖每3天调整2至4U。\n处理：糖尿病饮食、每周150分钟中等强度运动、减重和戒烟。\n随访：每周测空腹及餐后血糖，每3个月查HbA1c，每年查眼底、尿白蛋白和足部，警惕低血糖。",
         ),
         MedicalCase(
             id = "gastro-ugib",
@@ -204,6 +209,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "上消化道出血，十二指肠球部溃疡",
             differentialDiagnoses = listOf("食管胃底静脉曲张破裂出血", "急性胃黏膜病变", "胃癌", "下消化道出血"),
+            treatmentPlan = "治疗原则：液体复苏稳定循环，抑酸和急诊内镜止血。\n药物：艾司奥美拉唑80mg静脉推注后8mg/h持续泵入72小时，继以40mg口服每日1次，总疗程4至8周；血红蛋白低于70g/L时输血；幽门螺杆菌阳性者予阿莫西林1g每日2次、克拉霉素0.5g每日2次、枸橼酸铋钾0.6g每日2次及PPI共14天。\n处理：禁食、静脉补液，24小时内胃镜，活动性出血行钛夹或注射止血；停用非甾体抗炎药。\n随访：监测血压、心率、血红蛋白、尿素氮和黑便，复查胃镜及幽门螺杆菌。",
         ),
         MedicalCase(
             id = "urology-stone",
@@ -237,6 +243,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "右侧输尿管上段结石伴右肾积水",
             differentialDiagnoses = listOf("急性阑尾炎", "急性肾盂肾炎", "腰肌劳损", "腹主动脉瘤"),
+            treatmentPlan = "治疗原则：镇痛、促排石，防治感染和梗阻。\n药物：双氯芬酸钠75mg肌内注射1次，之后塞来昔布200mg口服每日1次，连用3至5天；坦索罗辛0.4mg口服每晚1次，最多4周。\n处理：多饮水，每日尿量2L以上；疼痛不缓解、合并感染或肾积水加重时行体外冲击波碎石、输尿管镜碎石或置管引流。\n随访：观察排石、疼痛及尿色，2至4周复查泌尿系CT和肾功能，发热寒战需急诊。",
         ),
         MedicalCase(
             id = "pediatric-diarrhea",
@@ -270,6 +277,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "急性轮状病毒肠炎伴中度等渗性脱水",
             differentialDiagnoses = listOf("细菌性痢疾", "食物蛋白过敏", "乳糖不耐受", "肠套叠"),
+            treatmentPlan = "治疗原则：口服补液纠正脱水，继续喂养，不用止泻药和抗生素。\n药物：口服补液盐III按75ml/kg（约975ml）于4小时内少量多次服完；呕吐明显可昂丹司琼0.15mg/kg单次口服或静注（最大8mg）；元素锌20mg每日1次，共10至14天。\n处理：若不能口服或脱水加重，静脉输注乳酸林格液；继续原饮食，少量多餐。\n随访：监测精神、尿量、体重、心率和电解质，4至6小时复评，出现血便、高热或抽搐及时复诊。",
         ),
         MedicalCase(
             id = "gyne-ectopic",
@@ -303,6 +311,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "右侧输卵管妊娠（异位妊娠）",
             differentialDiagnoses = listOf("早期妊娠流产", "黄体破裂", "急性阑尾炎", "卵巢囊肿蒂扭转"),
+            treatmentPlan = "治疗原则：立即评估血流动力学，优先止血和抢救休克。\n药物：建立两条静脉通路，快速输注乳酸林格液；备血，必要时输血；疼痛用对乙酰氨基酚1g口服或静脉；稳定未破裂者可用甲氨蝶呤50mg/m2单次肌注。\n处理：本例有腹腔积液和低血压，立即腹腔镜探查，行输卵管切除或开窗取胚；休克或破裂者禁行药物保守治疗。\n随访：监测血压、血红蛋白、hCG至正常，术后复查超声，指导避孕及下次妊娠早期就诊。",
         ),
         MedicalCase(
             id = "resp-asthma",
@@ -336,6 +345,7 @@ object BuiltInCases {
             ),
             correctDiagnosis = "支气管哮喘急性发作（中度）",
             differentialDiagnoses = listOf("急性支气管炎", "心源性哮喘", "异物吸入", "慢性阻塞性肺疾病"),
+            treatmentPlan = "治疗原则：迅速缓解支气管痉挛、纠正缺氧，评估重症风险。\n药物：沙丁胺醇2.5至5mg雾化吸入，每20分钟1次共3次，随后按需；异丙托溴铵0.5mg雾化每20分钟1次共3次；泼尼松40mg口服每日1次，连用5至7天。\n处理：吸氧维持SpO2 93%至95%，去除诱因，效果差可硫酸镁2g缓慢静滴；控制后予布地奈德/福莫特罗160/4.5μg每次1吸每日2次。\n随访：监测PEF、心率、血气和症状，1周复诊，制定书面哮喘行动计划。",
         ),
     )
 

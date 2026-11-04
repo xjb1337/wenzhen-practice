@@ -200,6 +200,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         onRetryMessage = viewModel::retryFailedMessage,
                         onRequestClinical = viewModel::requestClinical,
                         isQueryingClinical = uiState.isQueryingClinical,
+                        encounterType = uiState.encounterType,
                         startedAtMillis = uiState.consultationStartedAt ?: System.currentTimeMillis(),
                     )
                 }
@@ -219,6 +220,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         department = medicalCase.department,
                         onBack = { navController.popBackStack() },
                         onSubmit = viewModel::finishConsultation,
+                        initialGenerateRecord = uiState.settings.generateRecord,
                         isSubmitting = uiState.isFinishing,
                         errorMessage = uiState.finishError,
                         onDismissError = viewModel::clearFinishError,

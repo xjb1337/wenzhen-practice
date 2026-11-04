@@ -69,6 +69,7 @@ class MedicalRecordServiceTest {
             messages = messages,
             initialDiagnosis = "急性心肌梗死",
             diagnosisBasis = "压榨性胸痛伴左肩放射",
+            treatmentAnswer = "尽快再灌注并双联抗血小板",
         )
 
         val physicalExamIndex = record.indexOf("体格检查\n")
@@ -80,6 +81,8 @@ class MedicalRecordServiceTest {
         assertTrue(record.contains("初步诊断\n急性ST段抬高型心肌梗死"))
         assertEquals(2, fakeClient.lastMessages.size)
         assertTrue(fakeClient.lastMessages.first().content.contains("系统回顾必须写在体格检查之后"))
+        assertTrue(fakeClient.lastMessages.last().content.contains("尽快再灌注并双联抗血小板"))
+        assertTrue(fakeClient.lastMessages.last().content.contains("用于“诊疗计划”"))
     }
 
     private class FakeLlmClient(

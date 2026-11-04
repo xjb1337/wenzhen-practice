@@ -1,14 +1,16 @@
 package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.model.ChatMessage
+import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.MessageRole
 
 enum class HistoryTopic(val label: String) {
     CHIEF_COMPLAINT("主诉"),
     PRESENT_ILLNESS("现病史"),
-    PAST_HISTORY("既往史"),
+    PAST_HISTORY("既往史/过敏/用药"),
     PERSONAL_HISTORY("个人史"),
     MARITAL_HISTORY("婚育史"),
+    MENSTRUAL_HISTORY("月经史"),
     FAMILY_HISTORY("家族史"),
     REVIEW_OF_SYSTEMS("系统回顾"),
 }
@@ -29,6 +31,12 @@ data class CoverageReport(
 }
 
 object CoverageAnalyzer {
+    private val outpatientTopics = listOf(
+        HistoryTopic.CHIEF_COMPLAINT,
+        HistoryTopic.PRESENT_ILLNESS,
+        HistoryTopic.PAST_HISTORY,
+    )
+
     private val keywords: Map<HistoryTopic, List<String>> = mapOf(
         HistoryTopic.CHIEF_COMPLAINT to listOf(
             "哪里不舒服", "怎么不舒服", "什么不舒服", "什么症状", "主诉", "多久了",
@@ -49,7 +57,10 @@ object CoverageAnalyzer {
         ),
         HistoryTopic.MARITAL_HISTORY to listOf(
             "结婚", "婚姻", "配偶", "伴侣", "生育", "孩子", "子女", "怀孕",
-            "妊娠", "月经", "末次月经", "性生活", "避孕",
+            "妊娠", "性生活", "避孕",
+        ),
+        HistoryTopic.MENSTRUAL_HISTORY to listOf(
+            "月经", "末次月经", "经期", "痛经", "绝经",
         ),
         HistoryTopic.FAMILY_HISTORY to listOf(
             "家族", "父母", "父亲", "母亲", "兄弟", "姐妹", "遗传", "家人",
@@ -61,17 +72,40 @@ object CoverageAnalyzer {
         ),
     )
 
-    fun analyze(messages: List<ChatMessage>): CoverageReport {
+    fun analyze(
+        messages: List<ChatMessage>,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
+        gender: String? = null,
+        age: String? = null,
+    ): CoverageReport {
         val doctorText = messages
             .filter { it.role == MessageRole.DOCTOR }
             .joinToString(separator = "\n") { it.content }
-        return analyzeText(doctorText)
+        return analyzeText(doctorText, encounterType, gender, age)
     }
 
-    fun analyzeText(doctorText: String): CoverageReport {
+    fun analyzeText(
+        doctorText: String,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
+        gender: String? = null,
+        age: String? = null,
+    ): CoverageReport {
         val text = doctorText.lowercase()
+        val topics = if (encounterType == EncounterType.OUTPATIENT) {
+            outpatientTopics
+        } else {
+            outpatientTopics + listOfNotNull(
+                HistoryTopic.PERSONAL_HISTORY,
+                HistoryTopic.MARITAL_HISTORY,
+                HistoryTopic.MENSTRUAL_HISTORY.takeIf {
+                    gender?.contains("女") == true && ageInYears(age)?.let { it in 12..55 } == true
+                },
+                HistoryTopic.FAMILY_HISTORY,
+                HistoryTopic.REVIEW_OF_SYSTEMS,
+            )
+        }
         return CoverageReport(
-            topics = HistoryTopic.entries.map { topic ->
+            topics = topics.map { topic ->
                 TopicCoverage(
                     topic = topic,
                     covered = keywords[topic].orEmpty().any { keyword ->
@@ -81,4 +115,7 @@ object CoverageAnalyzer {
             },
         )
     }
+
+    private fun ageInYears(age: String?): Int? = age
+        ?.let { Regex("\\d+").find(it)?.value?.toIntOrNull() }
 }

@@ -16,6 +16,8 @@ import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.PatientPersonality
+import com.xjb.wenzhen.data.model.EncounterType
+import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.ScoreParser
@@ -60,6 +62,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
     fun openCase(
         medicalCase: MedicalCase,
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
     ) {
         val openingMessage = ChatMessage(
             role = MessageRole.PATIENT,
@@ -69,6 +72,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             it.copy(
                 activeCase = medicalCase,
                 patientPersonality = personality,
+                encounterType = encounterType,
                 consultationStartedAt = System.currentTimeMillis(),
                 messages = listOf(openingMessage),
                 isPatientTyping = false,
@@ -111,6 +115,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             medicalCase = medicalCase,
             config = state.settings.toLlmConfig(),
             personality = state.patientPersonality,
+            encounterType = state.encounterType,
             conversation = conversation,
             doctorIndex = conversation.lastIndex,
         )
@@ -145,6 +150,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             medicalCase = medicalCase,
             config = state.settings.toLlmConfig(),
             personality = state.patientPersonality,
+            encounterType = state.encounterType,
             conversation = conversation,
             doctorIndex = failedIndex,
         )
@@ -154,6 +160,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         medicalCase: MedicalCase,
         config: com.xjb.wenzhen.data.model.LlmConfig,
         personality: PatientPersonality,
+        encounterType: EncounterType,
         conversation: List<ChatMessage>,
         doctorIndex: Int,
     ) {
@@ -164,6 +171,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     medicalCase = medicalCase,
                     messages = conversation,
                     personality = personality,
+                    encounterType = encounterType,
                     onDelta = { delta ->
                         if (delta.isNotEmpty()) {
                             _uiState.update { latest ->
@@ -370,10 +378,11 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         }
         viewModelScope.launch {
             try {
-                val generated = container.caseGenerationService.generate(
+                val (generated, finalPersonality) = container.caseGenerationService.generate(
                     config = state.settings.toLlmConfig(),
                     department = department,
                     difficulty = difficulty,
+                    personality = personality,
                 )
                 _uiState.update { latest ->
                     latest.copy(
@@ -382,7 +391,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                         generationError = null,
                     )
                 }
-                openCase(generated, personality)
+                openCase(generated, finalPersonality)
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -398,7 +407,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         _uiState.update { it.copy(generationError = null) }
     }
 
-    fun finishConsultation(initialDiagnosis: String, diagnosisBasis: String) {
+    fun finishConsultation(initialDiagnosis: String, diagnosisBasis: String, treatmentAnswer: String = "", generateRecord: Boolean = _uiState.value.settings.generateRecord) {
         val diagnosis = initialDiagnosis.trim()
         if (diagnosis.isEmpty()) {
             _uiState.update { it.copy(finishError = "请先填写你的初步诊断。") }
@@ -424,13 +433,15 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             try {
                 val (record, score) = coroutineScope {
                     val recordTask = async {
-                        container.medicalRecordService.generate(
+                        if (generateRecord) container.medicalRecordService.generate(
                             config = config,
                             medicalCase = medicalCase,
                             messages = conversation,
                             initialDiagnosis = diagnosis,
                             diagnosisBasis = diagnosisBasis.trim(),
-                        )
+                            encounterType = state.encounterType,
+                            treatmentAnswer = treatmentAnswer.trim(),
+                        ) else ""
                     }
                     val scoreTask = async {
                         container.scoreService.evaluate(
@@ -439,6 +450,8 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                             messages = conversation,
                             initialDiagnosis = diagnosis,
                             diagnosisBasis = diagnosisBasis.trim(),
+                            encounterType = state.encounterType,
+                            treatmentAnswer = treatmentAnswer.trim(),
                         )
                     }
                     recordTask.await() to scoreTask.await()
@@ -459,6 +472,9 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     diagnosisBasis = diagnosisBasis.trim(),
                     createdAt = createdAt,
                     patientPersonality = state.patientPersonality.name,
+                    encounterType = state.encounterType.name,
+                    treatmentAnswer = treatmentAnswer.trim(),
+                    recordType = if (generateRecord) state.encounterType.name else "NONE",
                 )
                 val recordId = container.consultationRepository.save(entity)
                 val result = ResultViewData(
@@ -471,6 +487,8 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     medicalRecord = record,
                     score = score,
                     initialDiagnosis = diagnosis,
+                    treatmentAnswer = treatmentAnswer.trim(),
+                    encounterType = state.encounterType,
                 )
                 _uiState.update {
                     it.copy(
@@ -495,7 +513,13 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         _uiState.update { it.copy(finishError = null) }
     }
 
-    fun saveSettings(apiKey: String, model: String, baseUrl: String) {
+    fun saveSettings(
+        apiKey: String,
+        model: String,
+        baseUrl: String,
+        thinkingLevel: ThinkingLevel = _uiState.value.settings.thinkingLevel,
+        generateRecord: Boolean = _uiState.value.settings.generateRecord,
+    ) {
         val normalizedUrl = baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL }
         if (!normalizedUrl.startsWith("https://") && !normalizedUrl.startsWith("http://")) {
             _uiState.update { it.copy(settingsSaveError = "Base URL 必须以 http:// 或 https:// 开头。") }
@@ -505,6 +529,8 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             apiKey = apiKey.trim(),
             model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
             baseUrl = normalizedUrl.trimEnd('/'),
+            thinkingLevel = thinkingLevel,
+            generateRecord = generateRecord,
         )
         try {
             container.settingsRepository.save(newSettings)
@@ -529,7 +555,12 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
         _uiState.update { it.copy(settingsSaveError = null) }
     }
 
-    fun testConnection(apiKey: String, model: String, baseUrl: String) {
+    fun testConnection(
+        apiKey: String,
+        model: String,
+        baseUrl: String,
+        thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+    ) {
         if (_uiState.value.connectionTest.isTesting) return
         val key = apiKey.trim()
         if (key.isEmpty()) {
@@ -559,6 +590,7 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
             apiKey = key,
             model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
             baseUrl = normalizedUrl.trimEnd('/'),
+            thinkingLevel = thinkingLevel,
         ).toLlmConfig()
         _uiState.update { it.copy(connectionTest = ConnectionTestUiState(isTesting = true)) }
         viewModelScope.launch {
@@ -686,6 +718,8 @@ class AppViewModel(private val container: AppContainer) : ViewModel() {
                     medicalRecord = entity.medicalRecord,
                     score = score,
                     initialDiagnosis = entity.initialDiagnosis,
+                    treatmentAnswer = entity.treatmentAnswer,
+                    encounterType = EncounterType.from(entity.encounterType),
                 )
                 _uiState.update {
                     it.copy(

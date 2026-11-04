@@ -5,6 +5,8 @@ import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
 import com.github.takahirom.roborazzi.captureRoboImage
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeUp
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
@@ -44,9 +46,10 @@ class ScreenshotTest {
     private val score = ScoreResult(
         totalScore = 85,
         coverageScore = 34,
-        techniqueScore = 17,
-        communicationScore = 18,
+        techniqueScore = 14,
+        communicationScore = 13,
         diagnosisScore = 16,
+        treatmentScore = 8,
         coveredPoints = listOf("询问了胸痛起病时间和诱因", "询问了疼痛性质和放射部位", "询问了伴随症状"),
         missedQuestions = listOf("未系统询问饮酒史", "未询问既往用药依从性"),
         strengths = listOf("问诊语言自然，能及时追问", "重点围绕胸痛展开，条理清楚"),
@@ -181,7 +184,7 @@ class ScreenshotTest {
                     model = AppSettings.MODEL_PRO,
                     baseUrl = AppSettings.DEFAULT_BASE_URL,
                 ),
-                onSave = { _, _, _ -> },
+                onSave = { _, _, _, _, _ -> },
                 onBack = {},
             )
         }
@@ -193,7 +196,7 @@ class ScreenshotTest {
         setScreen {
             SettingsScreen(
                 settings = AppSettings(),
-                onSave = { _, _, _ -> },
+                onSave = { _, _, _, _, _ -> },
                 onBack = {},
                 initialGuideExpanded = true,
             )
@@ -210,7 +213,7 @@ class ScreenshotTest {
                     model = AppSettings.MODEL_FLASH,
                     baseUrl = AppSettings.DEFAULT_BASE_URL,
                 ),
-                onSave = { _, _, _ -> },
+                onSave = { _, _, _, _, _ -> },
                 onBack = {},
                 connectionTest = ConnectionTestUiState(
                     message = "连接成功，API Key 可用。",
@@ -264,7 +267,7 @@ class ScreenshotTest {
                 patientName = medicalCase.patient.name,
                 department = medicalCase.department,
                 onBack = {},
-                onSubmit = { _, _ -> },
+                onSubmit = { _, _, _, _ -> },
                 initialDiagnosis = "急性冠脉综合征",
                 initialDiagnosisBasis = "持续胸痛伴大汗，向左肩放射，有高血压和吸烟史。",
             )
@@ -286,6 +289,70 @@ class ScreenshotTest {
             SampleResultScreen(initialTab = ResultTab.REVIEW)
         }
         capture("result_review.png")
+    }
+
+    @Test
+    fun personalityPickerChildScreenshot() {
+        val child = BuiltInCases.all.first { (it.patient.age.filter(Char::isDigit).toIntOrNull() ?: 99) < 14 }
+        setScreen {
+            com.xjb.wenzhen.ui.screens.PersonalityPickerDialog(medicalCase = child, onDismiss = {}, onConfirm = { _, _ -> })
+        }
+        captureDialog("personality_picker_child.png")
+    }
+
+    @Test
+    fun personalityPickerAdultScreenshot() {
+        setScreen {
+            com.xjb.wenzhen.ui.screens.PersonalityPickerDialog(medicalCase = medicalCase, onDismiss = {}, onConfirm = { _, _ -> })
+        }
+        captureDialog("personality_picker_adult.png")
+    }
+
+    @Test
+    fun settingsThinkingScreenshot() {
+        setScreen {
+            SettingsScreen(settings = AppSettings(apiKey = "sk-demo", thinkingLevel = com.xjb.wenzhen.data.model.ThinkingLevel.HIGH), onSave = { _, _, _, _, _ -> }, onBack = {})
+        }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        capture("settings_thinking.png")
+    }
+
+    @Test
+    fun finishWithTreatmentScreenshot() {
+        setScreen {
+            FinishConsultationScreen(
+                caseTitle = medicalCase.title,
+                patientName = medicalCase.patient.name,
+                department = medicalCase.department,
+                onBack = {},
+                onSubmit = { _, _, _, _ -> },
+                initialDiagnosis = "急性ST段抬高型心肌梗死",
+                initialDiagnosisBasis = "持续胸痛伴大汗，向左肩放射。",
+                initialTreatment = "阿司匹林+替格瑞洛负荷，他汀，尽快急诊PCI。",
+                initialGenerateRecord = true,
+            )
+        }
+        composeRule.onRoot().performTouchInput { swipeUp() }
+        capture("finish_treatment_toggle.png")
+    }
+
+    @Test
+    fun resultReviewWithoutRecordScreenshot() {
+        setScreen {
+            ResultScreen(
+                caseTitle = medicalCase.title,
+                patientName = medicalCase.patient.name,
+                department = medicalCase.department,
+                difficulty = medicalCase.difficulty.label,
+                createdAt = 1_700_000_100_000,
+                medicalRecord = "",
+                score = score,
+                initialDiagnosis = "急性心肌梗死",
+                onBack = {},
+            )
+        }
+        capture("result_no_record.png")
     }
 
     @Composable

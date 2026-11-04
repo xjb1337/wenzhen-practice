@@ -64,6 +64,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.ClinicalRequestType
+import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
@@ -96,6 +97,7 @@ fun ChatScreen(
     onRetryMessage: () -> Unit = {},
     onRequestClinical: (ClinicalRequestType, String) -> Unit = { _, _ -> },
     isQueryingClinical: Boolean = false,
+    encounterType: EncounterType = EncounterType.OUTPATIENT,
     startedAtMillis: Long = System.currentTimeMillis(),
     coverageInitiallyExpanded: Boolean = false,
 ) {
@@ -107,7 +109,14 @@ fun ChatScreen(
     var elapsedSeconds by remember(startedAtMillis) { mutableLongStateOf(0L) }
     var coverageExpanded by rememberSaveable { mutableStateOf(coverageInitiallyExpanded) }
     var clinicalType by remember { mutableStateOf<ClinicalRequestType?>(null) }
-    val coverage = remember(messages) { CoverageAnalyzer.analyze(messages) }
+    val coverage = remember(messages, encounterType, medicalCase.patient.gender, medicalCase.patient.age) {
+        CoverageAnalyzer.analyze(
+            messages = messages,
+            encounterType = encounterType,
+            gender = medicalCase.patient.gender,
+            age = medicalCase.patient.age,
+        )
+    }
     val timer = formatElapsed(elapsedSeconds)
 
     LaunchedEffect(messageCount) {
@@ -272,13 +281,13 @@ private fun CoverageHintBar(
                 Spacer(modifier = Modifier.size(9.dp))
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "问诊提示 · 已覆盖 ${report.coveredCount}/7",
+                        text = "问诊提示 · 已覆盖 ${report.coveredCount}/${report.topics.size}",
                         style = MaterialTheme.typography.labelLarge,
                     )
                     if (!expanded) {
                         Text(
                             text = if (report.missing.isEmpty()) {
-                                "七个方面均已问及"
+                                "所有方面均已问及"
                             } else {
                                 "尚未问及：${report.missing.joinToString("、") { it.label }}"
                             },

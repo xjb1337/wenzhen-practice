@@ -82,12 +82,13 @@ fun ResultScreen(
 ) {
     var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
     val context = LocalContext.current
-    val currentText = if (selectedTabIndex == ResultTab.RECORD.ordinal) {
+    val showRecord = medicalRecord.isNotBlank() && selectedTabIndex == ResultTab.RECORD.ordinal
+    val currentText = if (showRecord) {
         medicalRecord
     } else {
         scoreAsText(score)
     }
-    val copyLabel = if (selectedTabIndex == ResultTab.RECORD.ordinal) "病历已复制" else "点评已复制"
+    val copyLabel = if (showRecord) "病历已复制" else "点评已复制"
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -113,8 +114,8 @@ fun ResultScreen(
                         onClick = {
                             val intent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, "$caseTitle 问诊病历")
-                                putExtra(Intent.EXTRA_TEXT, medicalRecord)
+                                putExtra(Intent.EXTRA_SUBJECT, if (medicalRecord.isBlank()) "$caseTitle 问诊点评" else "$caseTitle 问诊病历")
+                                putExtra(Intent.EXTRA_TEXT, medicalRecord.ifBlank { scoreAsText(score) })
                             }
                             runCatching {
                                 context.startActivity(Intent.createChooser(intent, "分享问诊病历"))
@@ -148,6 +149,10 @@ fun ResultScreen(
                 score = score,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
+            if (medicalRecord.isBlank()) {
+                ReviewTab(score = score, modifier = Modifier.weight(1f))
+                return@Column
+            }
             TabRow(
                 selectedTabIndex = selectedTabIndex,
                 containerColor = MaterialTheme.colorScheme.background,
@@ -322,8 +327,9 @@ private fun RecordTab(
 @Composable
 private fun RecordBody(medicalRecord: String) {
     val headings = setOf(
-        "一般情况", "主诉", "现病史", "既往史", "个人史",
-        "婚育史", "家族史", "体格检查", "系统回顾", "初步诊断",
+        "一般情况", "主诉", "现病史", "既往史", "既往史/过敏史", "个人史",
+        "婚育史", "家族史", "体格检查", "辅助检查", "系统回顾", "初步诊断",
+        "处理意见", "诊疗计划",
     )
     var hasRenderedHeading = false
     Column {
@@ -376,19 +382,19 @@ private fun ReviewTab(
                     ScoreMetric(
                         label = "问诊要点覆盖",
                         value = score.coverageScore,
-                        max = 40,
+                        max = score.coverageMax,
                         color = TealPrimary,
                     )
                     ScoreMetric(
                         label = "问诊技巧与顺序",
                         value = score.techniqueScore,
-                        max = 20,
+                        max = score.techniqueMax,
                         color = TealSecondary,
                     )
                     ScoreMetric(
                         label = "医患沟通",
                         value = score.communicationScore,
-                        max = 20,
+                        max = score.communicationMax,
                         color = Color(0xFF00838F),
                     )
                     ScoreMetric(
@@ -397,6 +403,14 @@ private fun ReviewTab(
                         max = 20,
                         color = Color(0xFF5E6BC7),
                     )
+                    if (!score.isLegacy) {
+                        ScoreMetric(
+                            label = "治疗方案",
+                            value = score.treatmentScore,
+                            max = 15,
+                            color = Warm,
+                        )
+                    }
                 }
             }
         }
@@ -575,10 +589,11 @@ private fun ReviewListSection(
 private fun scoreAsText(score: ScoreResult): String = buildString {
     appendLine("问诊点评")
     appendLine("总分：${score.totalScore}/100（${score.gradeLabel}）")
-    appendLine("问诊要点覆盖：${score.coverageScore}/40")
-    appendLine("问诊技巧与顺序：${score.techniqueScore}/20")
-    appendLine("医患沟通：${score.communicationScore}/20")
+    appendLine("问诊要点覆盖：${score.coverageScore}/${score.coverageMax}")
+    appendLine("问诊技巧与顺序：${score.techniqueScore}/${score.techniqueMax}")
+    appendLine("医患沟通：${score.communicationScore}/${score.communicationMax}")
     appendLine("诊断准确：${score.diagnosisScore}/20")
+    if (!score.isLegacy) appendLine("治疗方案：${score.treatmentScore}/15")
     appendLine()
     appendLine("已覆盖要点：")
     appendLine(score.coveredPoints.joinToString("\n") { "· $it" }.ifBlank { "暂无" })

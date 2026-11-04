@@ -1,7 +1,9 @@
 package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.model.EncounterType
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -38,14 +40,72 @@ class PromptBuilderTest {
     }
 
     @Test
-    fun `评分提示词包含四个满分项和JSON约束`() {
+    fun `评分提示词包含五个满分项和JSON约束`() {
         val prompt = promptBuilder.buildScoreSystemPrompt(medicalCase)
 
-        assertTrue(prompt.contains("问诊要点覆盖40分"))
-        assertTrue(prompt.contains("问诊技巧与顺序20分"))
-        assertTrue(prompt.contains("医患沟通20分"))
+        assertTrue(prompt.contains("问诊要点覆盖35分"))
+        assertTrue(prompt.contains("问诊技巧与顺序15分"))
+        assertTrue(prompt.contains("医患沟通15分"))
         assertTrue(prompt.contains("诊断准确20分"))
+        assertTrue(prompt.contains("治疗方案15分"))
+        assertTrue(prompt.contains("总分等于五项之和"))
         assertTrue(prompt.contains("\"totalScore\""))
         assertTrue(prompt.contains("只输出一个合法 JSON 对象"))
+    }
+
+    @Test
+    fun `门诊与住院患者提示词按就诊类型区分`() {
+        val outpatient = promptBuilder.buildPatientPrompt(
+            medicalCase = medicalCase,
+            encounterType = EncounterType.OUTPATIENT,
+        )
+        val inpatient = promptBuilder.buildPatientPrompt(
+            medicalCase = medicalCase,
+            encounterType = EncounterType.INPATIENT,
+        )
+
+        assertNotEquals(outpatient, inpatient)
+        assertTrue(outpatient.contains(EncounterType.OUTPATIENT.label))
+        assertTrue(inpatient.contains(EncounterType.INPATIENT.label))
+        assertTrue(inpatient.contains("系统回顾"))
+    }
+
+    @Test
+    fun `门诊与住院评分提示词按就诊类型区分`() {
+        val outpatient = promptBuilder.buildScoreSystemPrompt(
+            medicalCase = medicalCase,
+            encounterType = EncounterType.OUTPATIENT,
+        )
+        val inpatient = promptBuilder.buildScoreSystemPrompt(
+            medicalCase = medicalCase,
+            encounterType = EncounterType.INPATIENT,
+        )
+
+        assertNotEquals(outpatient, inpatient)
+        assertTrue(outpatient.contains("门诊不因未问系统回顾"))
+        assertTrue(inpatient.contains("住院应评价系统回顾"))
+    }
+
+    @Test
+    fun `病历用户提示词按就诊类型写入学生治疗方案`() {
+        val outpatient = promptBuilder.buildRecordUserPrompt(
+            messages = emptyList(),
+            initialDiagnosis = "急性心肌梗死",
+            diagnosisBasis = "持续胸痛伴大汗",
+            encounterType = EncounterType.OUTPATIENT,
+            treatmentAnswer = "立即转诊并双联抗血小板",
+        )
+        val inpatientWithoutTreatment = promptBuilder.buildRecordUserPrompt(
+            messages = emptyList(),
+            initialDiagnosis = "急性心肌梗死",
+            diagnosisBasis = "持续胸痛伴大汗",
+            encounterType = EncounterType.INPATIENT,
+        )
+
+        assertTrue(outpatient.contains("用于“处理意见”"))
+        assertTrue(outpatient.contains("立即转诊并双联抗血小板"))
+        assertTrue(inpatientWithoutTreatment.contains("用于“诊疗计划”"))
+        assertTrue(inpatientWithoutTreatment.contains("未填写"))
+        assertFalse(outpatient.contains("用于“诊疗计划”"))
     }
 }

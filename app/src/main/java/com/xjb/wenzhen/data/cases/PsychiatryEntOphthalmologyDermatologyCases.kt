@@ -39,6 +39,7 @@ object PsychiatryEntOphthalmologyDermatologyCases {
             ),
             correctDiagnosis = "抑郁症（中度伴自杀意念）",
             differentialDiagnoses = listOf("双相情感障碍抑郁相", "甲状腺功能减退", "适应障碍", "焦虑障碍"),
+            treatmentPlan = "治疗原则：首先确保安全，评估自杀风险，联合心理治疗和抗抑郁药。\n药物：舍曲林50mg口服每日1次，2至4周后可视疗效增至100至200mg每日1次；失眠可短期用右佐匹克隆1至2mg睡前1次，限量2周。\n处理：建议精神科住院或家属24小时陪护，移除危险物品，开始认知行为治疗，避免独处和饮酒。\n随访：前4周每周复诊评估自杀意念、PHQ-9、药物不良反应，缓解后继续治疗至少6至12个月，复发者延长。",
         ),
         MedicalCase(
             id = "psych-gad",
@@ -72,6 +73,7 @@ object PsychiatryEntOphthalmologyDermatologyCases {
             ),
             correctDiagnosis = "广泛性焦虑障碍",
             differentialDiagnoses = listOf("惊恐障碍", "甲状腺功能亢进", "抑郁症", "心律失常"),
+            treatmentPlan = "治疗原则：心理治疗联合药物，长期管理并减少复发。\n药物：艾司西酞普兰10mg口服每日1次，2周后可增至20mg每日1次；起效前可短期用劳拉西泮0.5mg每日2次，不超过2至4周。\n处理：认知行为治疗、规律运动、睡眠卫生、减少咖啡因和酒精，学习放松训练。\n随访：4至6周评估GAD-7和症状，有效者继续治疗至少12个月，逐渐减量；监测焦虑加重、胃肠道反应、低钠血症和依赖风险。",
         ),
         MedicalCase(
             id = "ent-sudden-hearing-loss",
@@ -105,6 +107,7 @@ object PsychiatryEntOphthalmologyDermatologyCases {
             ),
             correctDiagnosis = "左耳突发性感音神经性聋",
             differentialDiagnoses = listOf("听神经瘤", "梅尼埃病", "突发性脑血管病", "分泌性中耳炎"),
+            treatmentPlan = "治疗原则：发病72小时内尽早改善内耳微循环、减轻炎症和神经保护。\n药物：泼尼松1mg/kg每日1次晨顿服（最大60mg），连用5至7天后逐渐减量；甲钴胺0.5mg口服每日3次；银杏叶提取物注射液87.5mg静滴每日1次，连用10至14天。\n处理：安静休息、避免噪声，可辅以高压氧；效果不佳时行鼓室内地塞米松5mg注射，每周1次共3次。\n随访：1至2周复查纯音测听，3个月评估听力，监测血糖、血压及耳鸣，单侧持续听力下降需复查MRI。",
         ),
         MedicalCase(
             id = "ophth-acute-glaucoma",
@@ -138,6 +141,7 @@ object PsychiatryEntOphthalmologyDermatologyCases {
             ),
             correctDiagnosis = "右眼急性闭角型青光眼发作",
             differentialDiagnoses = listOf("急性虹膜睫状体炎", "急性结膜炎", "角膜上皮损伤", "偏头痛"),
+            treatmentPlan = "治疗原则：急诊迅速降眼压、保护视神经，随后解除房角关闭。\n药物：毛果芸香碱1%滴眼每15分钟1次共2次，随后每4至6小时1次；噻吗洛尔0.5%每日2次；布林佐胺1%每日2次；乙酰唑胺500mg静脉注射后250mg每6小时1次；眼压仍高用20%甘露醇1g/kg快速静滴。\n处理：半卧位、镇痛止吐，眼压控制后24至48小时内行激光周边虹膜切开，对侧眼预防性治疗。\n随访：监测眼压、视力、角膜水肿和电解质，复查视野及视盘，长期眼科随访。",
         ),
         MedicalCase(
             id = "derm-herpes-zoster",
@@ -171,6 +175,7 @@ object PsychiatryEntOphthalmologyDermatologyCases {
             ),
             correctDiagnosis = "带状疱疹（右侧肋间神经）",
             differentialDiagnoses = listOf("单纯疱疹", "接触性皮炎", "肋间神经痛", "带状疱疹后神经痛"),
+            treatmentPlan = "治疗原则：尽早抗病毒、镇痛，预防继发感染和带状疱疹后神经痛。\n药物：伐昔洛韦1g口服每日3次，连用7天；普瑞巴林75mg口服每日2次，可逐渐增至150mg每日2次；疼痛明显加对乙酰氨基酚0.5g每6小时1次。\n处理：保持皮疹清洁干燥，避免搔抓，覆盖皮损，避免接触孕妇和免疫功能低下者；眼部或耳部受累立即专科就诊。\n随访：观察皮疹愈合、疼痛和神经痛，监测肾功能、头晕嗜睡，糖尿病者监测血糖，2至4周复诊。",
         ),
     )
 }

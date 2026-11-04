@@ -2,6 +2,7 @@ package com.xjb.wenzhen.data.api
 
 import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
+import com.xjb.wenzhen.data.model.ThinkingLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -101,6 +102,7 @@ class DeepSeekClient(
             }
             val payload = JSONObject().apply {
                 put("model", config.model)
+                put("thinking", JSONObject().put("type", "disabled"))
                 put("temperature", 0)
                 put("max_tokens", 1)
                 put("stream", false)
@@ -130,13 +132,19 @@ class DeepSeekClient(
             }
         }
 
-    private fun payload(
+    internal fun payload(
         config: LlmConfig,
         messages: List<LlmMessage>,
         temperature: Double,
     ): JSONObject = JSONObject().apply {
         put("model", config.model)
-        put("temperature", temperature)
+        if (config.thinkingLevel == ThinkingLevel.OFF) {
+            put("thinking", JSONObject().put("type", "disabled"))
+            put("temperature", temperature)
+        } else {
+            put("thinking", JSONObject().put("type", "enabled"))
+            config.thinkingLevel.apiValue?.let { put("reasoning_effort", it) }
+        }
         put("messages", JSONArray().apply {
             messages.forEach { message ->
                 put(JSONObject().apply {

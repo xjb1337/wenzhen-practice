@@ -2,6 +2,7 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.model.PatientPersonality
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -30,5 +31,14 @@ class PatientPersonalityTest {
         val prompt = promptBuilder.buildPatientPrompt(medicalCase, PatientPersonality.ELDERLY)
         assertTrue(prompt.contains("听力较差"))
         assertTrue(prompt.contains("家常事"))
+    }
+
+    @Test
+    fun `性格年龄限制符合病例年龄规则`() {
+        assertFalse(PatientPersonality.ELDERLY.availableFor("46岁"))
+        assertTrue(PatientPersonality.ELDERLY.availableFor("65岁"))
+        assertFalse(PatientPersonality.ELDERLY.availableFor("8岁"))
+        assertFalse(PatientPersonality.IMPATIENT.availableFor("8岁"))
+        assertFalse(PatientPersonality.ELDERLY.availableFor("年龄不详"))
     }
 }

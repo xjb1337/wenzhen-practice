@@ -36,6 +36,22 @@ class SseParserTest {
     }
 
     @Test
+    fun `仅包含 reasoning_content 的 delta 不输出`() {
+        assertSame(
+            SseEvent.Ignore,
+            SseParser.parseLine(
+                """data: {"choices":[{"delta":{"reasoning_content":"先思考一下"}}]}"""
+            ),
+        )
+    }
+
+    @Test
+    fun `content 与 reasoning_content 同时存在时只输出 content`() {
+        val line = """data: {"choices":[{"delta":{"reasoning_content":"思考","content":"胸口"}}]}"""
+        assertEquals(SseEvent.Delta("胸口"), SseParser.parseLine(line))
+    }
+
+    @Test
     fun `DONE 结束事件可识别`() {
         assertSame(SseEvent.Done, SseParser.parseLine("data: [DONE]"))
         assertSame(SseEvent.Done, SseParser.parseLine("data:[DONE]"))
