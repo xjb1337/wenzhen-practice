@@ -92,6 +92,7 @@ fun ResultScreen(
     modifier: Modifier = Modifier,
     initialTab: ResultTab = ResultTab.RECORD,
     messages: List<ChatMessage> = emptyList(),
+    notice: String? = null,
 ) {
     val tabs = availableResultTabs(hasRecord = medicalRecord.isNotBlank(), hasTranscript = messages.isNotEmpty())
     var selectedTabName by rememberSaveable { mutableStateOf(initialTab.name) }
@@ -107,6 +108,13 @@ fun ResultScreen(
         ResultTab.REVIEW -> "点评已复制"
         ResultTab.TRANSCRIPT -> "对话已复制"
     }
+    val shareSubjectSuffix = when (selectedTab) {
+        ResultTab.RECORD -> "问诊病历"
+        ResultTab.REVIEW -> "问诊点评"
+        ResultTab.TRANSCRIPT -> "问诊对话"
+    }
+    val shareChooserTitle = "分享$shareSubjectSuffix"
+    val shareContentDescription = "分享$shareSubjectSuffix"
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -132,11 +140,11 @@ fun ResultScreen(
                         onClick = {
                             val intent = Intent(Intent.ACTION_SEND).apply {
                                 type = "text/plain"
-                                putExtra(Intent.EXTRA_SUBJECT, if (medicalRecord.isBlank()) "$caseTitle 问诊点评" else "$caseTitle 问诊病历")
-                                putExtra(Intent.EXTRA_TEXT, medicalRecord.ifBlank { scoreAsText(score) })
+                                putExtra(Intent.EXTRA_SUBJECT, "$caseTitle $shareSubjectSuffix")
+                                putExtra(Intent.EXTRA_TEXT, currentText)
                             }
                             runCatching {
-                                context.startActivity(Intent.createChooser(intent, "分享问诊病历"))
+                                context.startActivity(Intent.createChooser(intent, shareChooserTitle))
                             }.onFailure {
                                 Toast.makeText(context, "未找到可用的分享应用", Toast.LENGTH_SHORT).show()
                             }
@@ -144,7 +152,7 @@ fun ResultScreen(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Share,
-                            contentDescription = "分享病历",
+                            contentDescription = shareContentDescription,
                         )
                     }
                 },
@@ -167,6 +175,22 @@ fun ResultScreen(
                 score = score,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
+            if (!notice.isNullOrBlank()) {
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                    shape = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+                    color = MaterialTheme.colorScheme.errorContainer,
+                ) {
+                    Text(
+                        text = notice,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                    )
+                }
+            }
             if (tabs.size == 1) {
                 ReviewTab(score = score, modifier = Modifier.weight(1f))
                 return@Column
@@ -447,6 +471,38 @@ private fun ReviewTab(
                 emptyText = "本次对话未明确覆盖问诊要点。",
             )
         }
+        if (score.evidence.any { it.messageIndexes.isNotEmpty() }) {
+            item {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(20.dp),
+                    color = MaterialTheme.colorScheme.surface,
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text("评分证据链", style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            "每个已覆盖问题都能回指到具体对话编号，可对照复核。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        score.evidence.filter { it.messageIndexes.isNotEmpty() }.forEach { item ->
+                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Text(item.question, style = MaterialTheme.typography.bodyMedium)
+                                Text(
+                                    item.messageIndexes.joinToString("、") { "第 $it 条" },
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = TealPrimary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
         item {
             ReviewListSection(
                 title = "遗漏问题",
@@ -657,7 +713,7 @@ private fun TranscriptTab(
                 },
             ) {
                 Text(
-                    text = transcriptSpeaker(message),
+                    text = "${transcriptSpeaker(message)} · ${transcriptTime(message.timestamp)}",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
@@ -688,5 +744,8 @@ private fun transcriptSpeaker(message: ChatMessage): String = when (message.role
     MessageRole.SYSTEM -> message.systemTitle ?: "检查结果"
 }
 
+private fun transcriptTime(timestamp: Long): String =
+    java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault()).format(java.util.Date(timestamp))
+
 internal fun transcriptAsText(messages: List<ChatMessage>): String =
-    messages.joinToString("\n") { "${transcriptSpeaker(it)}：${it.content}" }
+    messages.joinToString("\n") { "${transcriptSpeaker(it)}（${transcriptTime(it.timestamp)}）：${it.content}" }

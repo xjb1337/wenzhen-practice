@@ -27,7 +27,8 @@ class ScoreParserTest {
 
         val result = ScoreParser.parse(raw)
 
-        assertEquals(85, result.totalScore)
+        // 总分以分项相加为准（34+14+14+16=78），不再采信与分项不一致的 totalScore。
+        assertEquals(78, result.totalScore)
         assertEquals(34, result.coverageScore)
         assertEquals(14, result.techniqueScore)
         assertEquals(14, result.communicationScore)
@@ -63,7 +64,8 @@ class ScoreParserTest {
 
         val result = ScoreParser.parse(raw)
 
-        assertEquals(72, result.totalScore)
+        // 分项相加 30+14+15+12=71，与模型给出的 72 不一致时以分项为准。
+        assertEquals(71, result.totalScore)
         assertEquals(30, result.coverageScore)
         assertEquals("急性阑尾炎", result.correctDiagnosis)
     }

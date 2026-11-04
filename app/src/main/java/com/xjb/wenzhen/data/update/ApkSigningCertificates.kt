@@ -1,5 +1,6 @@
 package com.xjb.wenzhen.data.update
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageInfo
 import android.content.pm.PackageManager
@@ -20,6 +21,7 @@ object ApkSigningCertificates {
         sha256(info)
     }.getOrNull()
 
+    @SuppressLint("NewApi")
     @Suppress("DEPRECATION")
     private fun sha256(info: PackageInfo): String? {
         val signingInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) info.signingInfo else null

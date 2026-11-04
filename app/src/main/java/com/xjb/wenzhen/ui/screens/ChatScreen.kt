@@ -78,6 +78,7 @@ import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.EmptyState
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
+import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
 import com.xjb.wenzhen.ui.theme.TealPrimary
@@ -103,6 +104,12 @@ fun ChatScreen(
     encounterType: EncounterType = EncounterType.OUTPATIENT,
     startedAtMillis: Long = System.currentTimeMillis(),
     coverageInitiallyExpanded: Boolean = false,
+    lastReplyMillis: Long? = null,
+    lastReplyTokens: Int? = null,
+    requestNotice: String? = null,
+    contextWarning: Boolean = false,
+    onCancelRequest: () -> Unit = {},
+    onDismissNotice: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
     val showTyping = isPatientTyping && messages.lastOrNull()?.let {
@@ -159,17 +166,43 @@ fun ChatScreen(
             )
         },
         bottomBar = {
-            ChatComposer(
-                enabled = hasApiKey && !isPatientTyping && !isQueryingClinical,
-                isBusy = isPatientTyping || isQueryingClinical,
-                onSend = onSendMessage,
-                onRequestExam = {
-                    if (hasApiKey) clinicalType = ClinicalRequestType.PHYSICAL_EXAM else onOpenSettings()
-                },
-                onRequestLab = {
-                    if (hasApiKey) clinicalType = ClinicalRequestType.LAB_OR_IMAGING else onOpenSettings()
-                },
-            )
+            Column {
+                if (isPatientTyping || isQueryingClinical) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 18.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = if (isQueryingClinical) "正在获取检查结果…" else "患者正在回复…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = onCancelRequest) { Text("取消请求") }
+                    }
+                }
+                if (requestNotice != null) {
+                    NoticeBanner(
+                        message = requestNotice,
+                        actionLabel = "知道了",
+                        onAction = onDismissNotice,
+                        modifier = Modifier.padding(horizontal = 18.dp, vertical = 4.dp),
+                    )
+                }
+                ChatComposer(
+                    enabled = hasApiKey && !isPatientTyping && !isQueryingClinical,
+                    isBusy = isPatientTyping || isQueryingClinical,
+                    onSend = onSendMessage,
+                    onRequestExam = {
+                        if (hasApiKey) clinicalType = ClinicalRequestType.PHYSICAL_EXAM else onOpenSettings()
+                    },
+                    onRequestLab = {
+                        if (hasApiKey) clinicalType = ClinicalRequestType.LAB_OR_IMAGING else onOpenSettings()
+                    },
+                )
+            }
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
@@ -193,6 +226,30 @@ fun ChatScreen(
                 onToggle = { coverageExpanded = !coverageExpanded },
                 modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
             )
+            if (lastReplyMillis != null || contextWarning) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    lastReplyMillis?.let { millis ->
+                        Text(
+                            text = "上次回复 ${"%.1f".format(millis / 1000.0)}s" +
+                                (lastReplyTokens?.let { " · 约 $it tokens" } ?: ""),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (contextWarning) {
+                        Text(
+                            text = "对话较长，继续练习会增加耗时和费用，建议适时结束。",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                }
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier
@@ -646,7 +703,7 @@ private fun ClinicalRequestDialog(
                 OutlinedTextField(
                     value = item,
                     onValueChange = { item = it },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                     label = { Text("${requestType.label}项目") },
                     placeholder = {
                         Text(

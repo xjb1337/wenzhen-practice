@@ -6,6 +6,11 @@ import kotlin.math.roundToInt
 
 class ScoreParseException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
+data class ScoreEvidence(
+    val question: String,
+    val messageIndexes: List<Int>,
+)
+
 data class ScoreResult(
     val totalScore: Int,
     val coverageScore: Int,
@@ -20,6 +25,7 @@ data class ScoreResult(
     val diagnosisExplanation: String,
     val treatmentScore: Int = 0,
     val isLegacy: Boolean = false,
+    val evidence: List<ScoreEvidence> = emptyList(),
 ) {
     val coverageMax: Int get() = if (isLegacy) 40 else 35
     val techniqueMax: Int get() = if (isLegacy) 20 else 15
@@ -75,7 +81,8 @@ object ScoreParser {
         val diagnosisValue = (diagnosis ?: 0).coerceIn(0, 20)
         val treatmentValue = (treatment ?: 0).coerceIn(0, 15)
         val computedTotal = coverageValue + techniqueValue + communicationValue + diagnosisValue + treatmentValue
-        val total = (explicitTotal ?: computedTotal).coerceIn(0, 100)
+        // 总分以经过上下限裁剪后的分项相加为准，避免模型返回的 totalScore 与分项不一致。
+        val total = computedTotal.coerceIn(0, 100)
 
         return ScoreResult(
             totalScore = total,
@@ -98,6 +105,7 @@ object ScoreParser {
             ),
             treatmentScore = treatmentValue,
             isLegacy = legacy,
+            evidence = readEvidence(json),
         )
     }
 
@@ -116,7 +124,38 @@ object ScoreParser {
         put("improvements", JSONArray(score.improvements))
         put("correctDiagnosis", score.correctDiagnosis)
         put("diagnosisExplanation", score.diagnosisExplanation)
+        put("questionEvidence", JSONArray().apply {
+            score.evidence.forEach { item ->
+                put(JSONObject().apply {
+                    put("question", item.question)
+                    put("messageIndexes", JSONArray(item.messageIndexes))
+                })
+            }
+        })
     }.toString()
+
+    private fun readEvidence(json: JSONObject): List<ScoreEvidence> {
+        val array = json.optJSONArray("questionEvidence")
+            ?: json.optJSONArray("evidence")
+            ?: return emptyList()
+        return buildList {
+            for (index in 0 until array.length()) {
+                val item = array.optJSONObject(index) ?: continue
+                val question = item.optString("question").trim()
+                if (question.isEmpty()) continue
+                val indexes = item.optJSONArray("messageIndexes")
+                val values = buildList {
+                    if (indexes != null) {
+                        for (i in 0 until indexes.length()) {
+                            val value = indexes.optInt(i, -1)
+                            if (value > 0) add(value)
+                        }
+                    }
+                }.distinct().sorted()
+                add(ScoreEvidence(question = question, messageIndexes = values))
+            }
+        }
+    }
 
     private fun extractJsonObject(raw: String): JSONObject {
         val cleaned = raw.lineSequence()

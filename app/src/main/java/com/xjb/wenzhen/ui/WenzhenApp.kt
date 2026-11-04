@@ -129,24 +129,43 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     builtInCount = uiState.builtInCaseCount,
                     onDepartmentSelected = viewModel::selectDepartment,
                     onCaseSelected = viewModel::openCase,
+                    savedCaseIds = uiState.savedCases.map { it.id }.toSet(),
+                    favoriteCaseIds = uiState.savedCases.filter { it.favorite }.map { it.id }.toSet(),
+                    onToggleFavorite = viewModel::toggleSavedCaseFavorite,
+                    onDeleteSavedCase = viewModel::deleteSavedCase,
                     onGenerateCase = viewModel::generateCase,
                     onOpenSettings = {
                         navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
                     },
                     onClearGenerationError = viewModel::clearGenerationError,
+                    draftSummary = uiState.draft?.let {
+                        val typeLabel = when (it.encounterType) {
+                            "INPATIENT" -> "住院病人"
+                            else -> "门诊病人"
+                        }
+                        val timeLabel = android.text.format.DateFormat.format("MM-dd HH:mm", it.updatedAt)
+                        "$typeLabel · 上次保存于 $timeLabel"
+                    },
+                    onResumeDraft = viewModel::resumeDraft,
+                    onDiscardDraft = viewModel::discardDraft,
                     isGenerating = uiState.isGeneratingCase,
                     generationError = uiState.generationError,
                 )
             }
             composable(Routes.HISTORY) {
                 HistoryScreen(
-                    records = uiState.history,
+                    records = uiState.filteredHistory,
                     isLoading = uiState.historyLoading,
                     errorMessage = uiState.historyError,
                     onRecordClick = { recordId ->
                         navController.navigate(Routes.historyDetail(recordId))
                     },
                     onRetry = viewModel::retryHistory,
+                    query = uiState.historyQuery,
+                    onQueryChange = viewModel::setHistoryQuery,
+                    onDeleteRecord = viewModel::deleteHistory,
+                    onClearAll = viewModel::clearHistory,
+                    onRestore = viewModel::restoreHistory,
                     onBrowseCases = { navigateToRoot(navController, Routes.LIBRARY) },
                 )
             }
@@ -156,6 +175,10 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     isLoading = uiState.historyLoading,
                     errorMessage = uiState.historyError,
                     onRetry = viewModel::retryHistory,
+                    onDepartmentClick = { department ->
+                        viewModel.setHistoryQuery(department)
+                        navController.navigate(Routes.HISTORY) { launchSingleTop = true }
+                    },
                 )
             }
             composable(Routes.SETTINGS) {
@@ -163,6 +186,8 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     settings = uiState.settings,
                     onSave = viewModel::saveSettings,
                     onBack = { navController.popBackStack() },
+                    offlineMode = uiState.settings.offlineMode,
+                    onOfflineModeChange = viewModel::setOfflineMode,
                     saveError = uiState.settingsSaveError,
                     onDismissError = viewModel::clearSettingsSaveError,
                     onTestConnection = viewModel::testConnection,
@@ -188,7 +213,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         medicalCase = medicalCase,
                         messages = uiState.messages,
                         isPatientTyping = uiState.isPatientTyping,
-                        hasApiKey = uiState.hasApiKey,
+                        hasApiKey = uiState.canPractice,
                         errorMessage = uiState.chatError,
                         onSendMessage = viewModel::sendMessage,
                         onFinish = {
@@ -204,6 +229,12 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         isQueryingClinical = uiState.isQueryingClinical,
                         encounterType = uiState.encounterType,
                         startedAtMillis = uiState.consultationStartedAt ?: System.currentTimeMillis(),
+                        lastReplyMillis = uiState.lastReplyMillis,
+                        lastReplyTokens = uiState.lastReplyTokens,
+                        requestNotice = uiState.requestNotice,
+                        contextWarning = uiState.contextWarning,
+                        onCancelRequest = viewModel::cancelCurrentRequest,
+                        onDismissNotice = viewModel::clearRequestNotice,
                     )
                 }
             }
@@ -253,6 +284,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         score = result.score,
                         initialDiagnosis = result.initialDiagnosis,
                         messages = result.messages,
+                        notice = result.notice,
                         onBack = { navController.popBackStack() },
                     )
                 }

@@ -15,4 +15,10 @@ interface ConsultationDao {
 
     @Insert
     suspend fun insert(entity: ConsultationEntity): Long
+
+    @Query("DELETE FROM consultations WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    @Query("DELETE FROM consultations")
+    suspend fun deleteAll()
 }

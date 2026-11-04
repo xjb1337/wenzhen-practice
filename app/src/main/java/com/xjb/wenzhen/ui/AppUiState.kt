@@ -1,7 +1,10 @@
 package com.xjb.wenzhen.ui
 
+import com.xjb.wenzhen.BuildConfig
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.db.ConsultationEntity
+import com.xjb.wenzhen.data.db.ConsultationDraftEntity
+import com.xjb.wenzhen.data.db.SavedCaseEntity
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.MedicalCase
@@ -27,14 +30,17 @@ data class ResultViewData(
     val treatmentAnswer: String = "",
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
     val messages: List<ChatMessage> = emptyList(),
+    val notice: String? = null,
 )
 
 data class AppUiState(
-    val currentVersionName: String = "1.1.0",
-    val currentVersionCode: Int = 2,
+    val currentVersionName: String = BuildConfig.VERSION_NAME,
+    val currentVersionCode: Int = BuildConfig.VERSION_CODE,
     val cases: List<MedicalCase> = BuiltInCases.all,
+    val savedCases: List<SavedCaseEntity> = emptyList(),
     val selectedDepartment: String = Departments.ALL,
     val settings: AppSettings = AppSettings(),
+    val draft: ConsultationDraftEntity? = null,
     val activeCase: MedicalCase? = null,
     val patientPersonality: PatientPersonality = PatientPersonality.COOPERATIVE,
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
@@ -43,12 +49,16 @@ data class AppUiState(
     val isPatientTyping: Boolean = false,
     val isQueryingClinical: Boolean = false,
     val chatError: String? = null,
+    val lastReplyMillis: Long? = null,
+    val lastReplyTokens: Int? = null,
+    val requestNotice: String? = null,
     val isGeneratingCase: Boolean = false,
     val generationError: String? = null,
     val finishError: String? = null,
     val isFinishing: Boolean = false,
     val currentResult: ResultViewData? = null,
     val history: List<ConsultationEntity> = emptyList(),
+    val historyQuery: String = "",
     val historyLoading: Boolean = true,
     val historyError: String? = null,
     val historyDetail: ResultViewData? = null,
@@ -68,6 +78,9 @@ data class AppUiState(
     val hasApiKey: Boolean
         get() = settings.hasApiKey
 
+    val canPractice: Boolean
+        get() = hasApiKey || settings.offlineMode
+
     val builtInCaseCount: Int
         get() = BuiltInCases.all.size
 
@@ -84,6 +97,26 @@ data class AppUiState(
                 )
             }
         )
+
+    val filteredHistory: List<ConsultationEntity>
+        get() = historyQuery.trim().takeIf { it.isNotEmpty() }?.let { query ->
+            history.filter {
+                it.caseTitle.contains(query, ignoreCase = true) ||
+                    it.department.contains(query, ignoreCase = true) ||
+                    it.patientName.contains(query, ignoreCase = true)
+            }
+        } ?: history
+
+    /** 粗略的上下文 token 估算：中文约 1 字 ≈ 0.5 token，用于提前提醒。 */
+    val contextTokenEstimate: Int
+        get() {
+            val messageCost = messages.sumOf { it.content.length } / 2
+            val caseCost = (activeCase?.let { it.presentIllness.length + it.pastHistory.length } ?: 0) / 2
+            return messageCost + caseCost + 400
+        }
+
+    val contextWarning: Boolean
+        get() = contextTokenEstimate >= 12_000
 }
 
 sealed interface AppEvent {

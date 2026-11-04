@@ -18,23 +18,47 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Share
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.core.content.FileProvider
 import com.xjb.wenzhen.data.db.ConsultationEntity
+import com.xjb.wenzhen.data.db.ConversationJsonCodec
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.EmptyState
 import com.xjb.wenzhen.ui.components.LoadingState
@@ -43,6 +67,7 @@ import com.xjb.wenzhen.ui.components.formatDateTime
 import com.xjb.wenzhen.ui.theme.TealContainer
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
+import com.xjb.wenzhen.util.HistoryExporter
 
 @Composable
 fun HistoryScreen(
@@ -52,14 +77,125 @@ fun HistoryScreen(
     onRecordClick: (Long) -> Unit = {},
     onRetry: () -> Unit = {},
     onBrowseCases: () -> Unit = {},
+    query: String = "",
+    onQueryChange: (String) -> Unit = {},
+    onDeleteRecord: (Long) -> Unit = {},
+    onClearAll: () -> Unit = {},
+    onRestore: (List<ConsultationEntity>) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    var showClearConfirm by remember { mutableStateOf(false) }
+    var showExportMenu by remember { mutableStateOf(false) }
+    var selectedDepartment by rememberSaveable { mutableStateOf("全部") }
+    var scoreBand by rememberSaveable { mutableStateOf("全部") }
+    var dateBand by rememberSaveable { mutableStateOf("全部") }
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        runCatching {
+            val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
+                ?: error("无法读取文件")
+            val restored = HistoryExporter.parseBackup(raw)
+            require(restored.isNotEmpty()) { "没有可导入的记录" }
+            onRestore(restored)
+            restored.size
+        }.onSuccess { count ->
+            Toast.makeText(context, "已导入 $count 条记录", Toast.LENGTH_SHORT).show()
+        }.onFailure { error ->
+            Toast.makeText(context, "导入失败：${error.message}", Toast.LENGTH_LONG).show()
+        }
+    }
+    if (showClearConfirm) {
+        AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("清空全部历史记录？") },
+            text = { Text("将删除全部 ${records.size} 条问诊记录，且不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onClearAll()
+                    showClearConfirm = false
+                }) { Text("清空", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
+            },
+        )
+    }
+    val departments = listOf("全部") + records.map { it.department }.filter { it.isNotBlank() }.distinct()
+    val now = System.currentTimeMillis()
+    val visibleRecords = records.filter { record ->
+        val departmentMatch = selectedDepartment == "全部" || record.department == selectedDepartment
+        val scoreMatch = when (scoreBand) {
+            "60 分以下" -> record.totalScore < 60
+            "60-79 分" -> record.totalScore in 60..79
+            "80 分以上" -> record.totalScore >= 80
+            else -> true
+        }
+        val dateMatch = when (dateBand) {
+            "今天" -> now - record.createdAt < 24L * 60 * 60 * 1000
+            "最近 7 天" -> now - record.createdAt < 7L * 24 * 60 * 60 * 1000
+            "最近 30 天" -> now - record.createdAt < 30L * 24 * 60 * 60 * 1000
+            else -> true
+        }
+        departmentMatch && scoreMatch && dateMatch
+    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             WenzhenTopBar(
                 title = "历史记录",
                 subtitle = "回看每一次问诊与复盘",
+                actions = {
+                    if (records.isNotEmpty()) {
+                        Box {
+                            IconButton(onClick = { showExportMenu = true }) {
+                                Icon(Icons.Outlined.Share, contentDescription = "导出历史记录")
+                            }
+                            DropdownMenu(
+                                expanded = showExportMenu,
+                                onDismissRequest = { showExportMenu = false },
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text("导出 Markdown") },
+                                    onClick = {
+                                        showExportMenu = false
+                                        runCatching { HistoryExporter.writeMarkdown(context, records) }
+                                            .onSuccess { shareFile(context, it, "text/markdown", "导出问诊历史") }
+                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("导出 PDF") },
+                                    onClick = {
+                                        showExportMenu = false
+                                        runCatching { HistoryExporter.writePdf(context, records) }
+                                            .onSuccess { shareFile(context, it, "application/pdf", "导出问诊历史") }
+                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("导出 JSON 备份") },
+                                    onClick = {
+                                        showExportMenu = false
+                                        runCatching { HistoryExporter.writeJson(context, records) }
+                                            .onSuccess { shareFile(context, it, "application/json", "备份问诊历史") }
+                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("从 JSON 备份恢复") },
+                                    onClick = {
+                                        showExportMenu = false
+                                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                    },
+                                )
+                            }
+                        }
+                        IconButton(onClick = { showClearConfirm = true }) {
+                            Icon(Icons.Outlined.Delete, contentDescription = "清空历史记录")
+                        }
+                    }
+                },
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
@@ -99,7 +235,57 @@ fun HistoryScreen(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 item {
-                    HistorySummary(records = records)
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = onQueryChange,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text("搜索病例、科室或患者") },
+                        shape = RoundedCornerShape(16.dp),
+                    )
+                }
+                item {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            departments.forEach { department ->
+                                FilterChip(
+                                    selected = selectedDepartment == department,
+                                    onClick = { selectedDepartment = department },
+                                    label = { Text(department) },
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf("全部", "60 分以下", "60-79 分", "80 分以上").forEach { band ->
+                                FilterChip(
+                                    selected = scoreBand == band,
+                                    onClick = { scoreBand = band },
+                                    label = { Text(band) },
+                                )
+                            }
+                        }
+                        Row(
+                            modifier = Modifier.horizontalScroll(rememberScrollState()),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            listOf("全部", "今天", "最近 7 天", "最近 30 天").forEach { band ->
+                                FilterChip(
+                                    selected = dateBand == band,
+                                    onClick = { dateBand = band },
+                                    label = { Text(band) },
+                                )
+                            }
+                        }
+                    }
+                }
+                item {
+                    HistorySummary(records = visibleRecords)
                 }
                 item {
                     Row(
@@ -114,18 +300,47 @@ fun HistoryScreen(
                             modifier = Modifier.weight(1f),
                         )
                         Text(
-                            text = "共 ${records.size} 次",
+                            text = "共 ${visibleRecords.size} 次",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
-                items(records, key = { it.id }) { record ->
-                    HistoryCard(record = record, onClick = { onRecordClick(record.id) })
+                if (visibleRecords.isEmpty()) {
+                    item {
+                        Text(
+                            text = "没有符合筛选条件的记录。",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    }
+                }
+                items(visibleRecords, key = { it.id }) { record ->
+                    HistoryCard(record = record, onClick = { onRecordClick(record.id) }, onDelete = { onDeleteRecord(record.id) })
                 }
             }
         }
     }
+}
+
+private fun shareFile(context: android.content.Context, file: java.io.File, mime: String, title: String) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+    val intent = Intent(Intent.ACTION_SEND).apply {
+        type = mime
+        putExtra(Intent.EXTRA_STREAM, uri)
+        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+    }
+    context.startActivity(Intent.createChooser(intent, title))
+}
+
+private fun conversationDurationMinutes(record: ConsultationEntity): Long? {
+    val messages = ConversationJsonCodec.decode(record.conversationJson).filter { it.timestamp > 0 }
+    if (messages.size < 2) return null
+    val start = messages.minOf { it.timestamp }
+    val end = messages.maxOf { it.timestamp }
+    val minutes = (end - start) / 60_000
+    return minutes.takeIf { it > 0 }
 }
 
 @Composable
@@ -182,6 +397,7 @@ private fun HistorySummary(records: List<ConsultationEntity>) {
 private fun HistoryCard(
     record: ConsultationEntity,
     onClick: () -> Unit,
+    onDelete: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
@@ -212,7 +428,10 @@ private fun HistoryCard(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = formatDateTime(record.createdAt),
+                    text = buildString {
+                        append(formatDateTime(record.createdAt))
+                        conversationDurationMinutes(record)?.let { append(" · 用时 $it 分钟") }
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
@@ -224,6 +443,7 @@ private fun HistoryCard(
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
+                TextButton(onClick = onDelete) { Text("删除", color = MaterialTheme.colorScheme.error) }
                 Text(
                     text = "分",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

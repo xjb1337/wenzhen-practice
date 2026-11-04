@@ -56,6 +56,11 @@ enum class PatientPersonality(
             else -> true
         }
     }
+
+    companion object {
+        fun valueOfOrDefault(value: String?): PatientPersonality =
+            entries.firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: COOPERATIVE
+    }
 }
 
 data class PatientInfo(

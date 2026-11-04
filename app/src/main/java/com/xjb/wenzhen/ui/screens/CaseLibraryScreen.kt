@@ -73,11 +73,18 @@ fun CaseLibraryScreen(
     builtInCount: Int,
     onDepartmentSelected: (String) -> Unit = {},
     onCaseSelected: (MedicalCase, PatientPersonality, EncounterType) -> Unit = { _, _, _ -> },
+    savedCaseIds: Set<String> = emptySet(),
+    favoriteCaseIds: Set<String> = emptySet(),
+    onToggleFavorite: (String) -> Unit = {},
+    onDeleteSavedCase: (String) -> Unit = {},
     onGenerateCase: (String, Difficulty, PatientPersonality, EncounterType) -> Unit = { _, _, _, _ -> },
     onOpenSettings: () -> Unit = {},
     onClearGenerationError: () -> Unit = {},
     isGenerating: Boolean = false,
     generationError: String? = null,
+    draftSummary: String? = null,
+    onResumeDraft: () -> Unit = {},
+    onDiscardDraft: () -> Unit = {},
     isLoading: Boolean = false,
     loadError: String? = null,
     modifier: Modifier = Modifier,
@@ -119,6 +126,16 @@ fun CaseLibraryScreen(
             ) {
                 item {
                     PracticeHero(builtInCount = builtInCount)
+                }
+                if (draftSummary != null) {
+                    item {
+                        NoticeBanner(
+                            message = "发现未完成的问诊：$draftSummary",
+                            actionLabel = "继续问诊",
+                            onAction = onResumeDraft,
+                            onDismiss = onDiscardDraft,
+                        )
+                    }
                 }
                 item {
                     AiCaseCard(
@@ -179,6 +196,10 @@ fun CaseLibraryScreen(
                         CaseCard(
                             medicalCase = medicalCase,
                             onClick = { personalityCaseId = medicalCase.id },
+                            isSaved = medicalCase.id in savedCaseIds,
+                            isFavorite = medicalCase.id in favoriteCaseIds,
+                            onToggleFavorite = { onToggleFavorite(medicalCase.id) },
+                            onDelete = { onDeleteSavedCase(medicalCase.id) },
                         )
                     }
                 }
@@ -387,6 +408,10 @@ private fun DepartmentFilterRow(
 private fun CaseCard(
     medicalCase: MedicalCase,
     onClick: () -> Unit,
+    isSaved: Boolean = false,
+    isFavorite: Boolean = false,
+    onToggleFavorite: () -> Unit = {},
+    onDelete: () -> Unit = {},
 ) {
     Surface(
         modifier = Modifier
@@ -452,6 +477,20 @@ private fun CaseCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
+            if (isSaved) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = onToggleFavorite) {
+                        Text(if (isFavorite) "取消收藏" else "收藏")
+                    }
+                    TextButton(onClick = onDelete) {
+                        Text("删除")
+                    }
+                }
+            }
             Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),

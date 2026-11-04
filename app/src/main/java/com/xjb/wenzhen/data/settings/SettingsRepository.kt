@@ -41,6 +41,7 @@ class SettingsRepository(context: Context) {
                     .ifBlank { AppSettings.DEFAULT_BASE_URL },
                 thinkingLevel = ThinkingLevel.from(prefs.getString(KEY_THINKING_LEVEL, null)),
                 generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
+                offlineMode = prefs.getBoolean(KEY_OFFLINE_MODE, false),
             )
         }.getOrDefault(AppSettings())
     }
@@ -56,6 +57,7 @@ class SettingsRepository(context: Context) {
             )
             .putString(KEY_THINKING_LEVEL, settings.thinkingLevel.name)
             .putBoolean(KEY_GENERATE_RECORD, settings.generateRecord)
+            .putBoolean(KEY_OFFLINE_MODE, settings.offlineMode)
             .putString(
                 KEY_BASE_URL,
                 settings.baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL },
@@ -73,5 +75,6 @@ class SettingsRepository(context: Context) {
         private const val KEY_BASE_URL = "deepseek_base_url"
         private const val KEY_THINKING_LEVEL = "thinking_level"
         private const val KEY_GENERATE_RECORD = "generate_record"
+        private const val KEY_OFFLINE_MODE = "offline_mode"
     }
 }

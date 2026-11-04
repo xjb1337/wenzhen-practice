@@ -9,6 +9,7 @@ import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
 
@@ -55,7 +56,10 @@ class PatientChatService(
         encounterType: EncounterType,
     ): List<LlmMessage> = buildList {
         add(LlmMessage("system", promptBuilder.buildPatientPrompt(medicalCase, personality, encounterType)))
-        messages.filter { it.role != MessageRole.SYSTEM }.forEach { message ->
+        val usable = messages
+            .filter { it.role != MessageRole.SYSTEM && it.deliveryState == MessageDeliveryState.SENT }
+        val context = if (usable.size <= 80) usable else listOf(usable.first()) + usable.takeLast(79)
+        context.forEach { message ->
             add(
                 LlmMessage(
                     role = if (message.role == MessageRole.DOCTOR) "user" else "assistant",
@@ -156,9 +160,96 @@ class ScoreService(
             temperature = 0.2,
         )
         val parsed = ScoreParser.parse(raw)
-        return parsed.copy(
-            correctDiagnosis = parsed.correctDiagnosis.ifBlank { medicalCase.correctDiagnosis },
+        val rule = RuleScoreCalculator.compute(
+            medicalCase = medicalCase,
+            messages = messages,
+            initialDiagnosis = initialDiagnosis,
+            diagnosisBasis = diagnosisBasis,
+            treatmentAnswer = treatmentAnswer,
         )
+        val reconciled = ScoreReconciler.reconcile(parsed, medicalCase, messages, rule)
+        return reconciled.copy(
+            correctDiagnosis = reconciled.correctDiagnosis.ifBlank { medicalCase.correctDiagnosis },
+        )
+    }
+}
+
+object ScoreReconciler {
+    fun reconcile(
+        score: ScoreResult,
+        medicalCase: MedicalCase,
+        messages: List<ChatMessage>,
+        rule: RuleScore? = null,
+    ): ScoreResult {
+        if (score.isLegacy) return score
+        if (rule != null) {
+            val coveredPoints = rule.evidence
+                .filter { it.messageIndexes.isNotEmpty() }
+                .map { item ->
+                    val refs = item.messageIndexes.joinToString("") { "[$it]" }
+                    "${item.question}（见$refs）"
+                }
+                .distinct()
+            return score.copy(
+                coverageScore = rule.coverage,
+                techniqueScore = rule.technique,
+                communicationScore = rule.communication,
+                diagnosisScore = rule.diagnosis,
+                treatmentScore = rule.treatment,
+                totalScore = rule.total,
+                coveredPoints = coveredPoints,
+                missedQuestions = rule.missedQuestions.distinct(),
+                evidence = rule.evidence,
+            )
+        }
+        val evidence = QuestionCoverageAnalyzer.analyze(medicalCase, messages)
+        if (evidence.isEmpty()) return score
+        val covered = evidence.filter { it.covered }
+        val coveredQuestions = covered.map { it.question }
+        val sanitizedCovered = score.coveredPoints
+            .mapNotNull { sanitizeReference(it, messages) }
+            .distinct()
+            .take(evidence.size)
+        val missed = score.missedQuestions
+            .distinct()
+            .filterNot { missedQuestion ->
+                coveredQuestions.any { question -> related(missedQuestion, question) }
+            }
+            .take(evidence.size)
+        val coverageFloor = ((covered.size.toDouble() / evidence.size) * score.coverageMax).toInt()
+        // 问诊要点覆盖改为病例级本地规则分，模型只负责解释与建议，避免同一对话评分漂移。
+        val coverage = coverageFloor.coerceIn(0, score.coverageMax)
+        val total = (coverage + score.techniqueScore + score.communicationScore + score.diagnosisScore + score.treatmentScore)
+            .coerceIn(0, 100)
+        return score.copy(
+            coverageScore = coverage,
+            totalScore = total,
+            coveredPoints = sanitizedCovered,
+            missedQuestions = missed,
+            evidence = evidence.map { ScoreEvidence(it.question, it.messageIndexes) },
+        )
+    }
+
+    /**
+     * 校验模型给出的证据编号：必须指向真实存在的非系统消息；全部编号无效时丢弃该条覆盖点，
+     * 部分无效时仅去掉无效编号，避免“引用编号不存在”被当作有效证据。
+     */
+    private fun sanitizeReference(point: String, messages: List<ChatMessage>): String? {
+        val refs = Regex("\\[(\\d+)]").findAll(point).toList()
+        if (refs.isEmpty()) return point
+        val valid = refs.filter { match ->
+            val index = match.groupValues[1].toIntOrNull() ?: return@filter false
+            index in 1..messages.size && messages[index - 1].role != MessageRole.SYSTEM
+        }
+        if (valid.isEmpty()) return null
+        var cleaned = point
+        refs.filterNot { it in valid }.forEach { cleaned = cleaned.replace(it.value, "") }
+        return cleaned.trim()
+    }
+
+    private fun related(left: String, right: String): Boolean {
+        val leftTerms = Regex("[\\u4e00-\\u9fff]{2,}").findAll(left).map { it.value }.toList()
+        return leftTerms.any { term -> term.length >= 2 && right.contains(term) }
     }
 }
 

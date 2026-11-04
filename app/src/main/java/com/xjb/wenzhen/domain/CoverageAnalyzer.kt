@@ -3,6 +3,7 @@ package com.xjb.wenzhen.domain
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.MessageDeliveryState
 
 enum class HistoryTopic(val label: String) {
     CHIEF_COMPLAINT("主诉"),
@@ -86,7 +87,7 @@ object CoverageAnalyzer {
         age: String? = null,
     ): CoverageReport {
         val doctorText = messages
-            .filter { it.role == MessageRole.DOCTOR }
+            .filter { it.role == MessageRole.DOCTOR && it.deliveryState == MessageDeliveryState.SENT }
             .joinToString(separator = "\n") { it.content }
         return analyzeText(doctorText, encounterType, gender, age)
     }

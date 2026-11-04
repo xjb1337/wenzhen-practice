@@ -9,6 +9,7 @@ data class AppSettings(
     val baseUrl: String = DEFAULT_BASE_URL,
     val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     val generateRecord: Boolean = false,
+    val offlineMode: Boolean = false,
 ) {
     val hasApiKey: Boolean
         get() = apiKey.isNotBlank()
@@ -24,5 +25,12 @@ data class AppSettings(
         const val MODEL_FLASH = "deepseek-flash"
         const val MODEL_PRO = "deepseek-v4-pro"
         const val DEFAULT_BASE_URL = "https://api.deepseek.com"
+    }
+}
+
+object BaseUrlPolicy {
+    fun normalizeHttps(value: String): String? {
+        val normalized = value.trim().ifBlank { AppSettings.DEFAULT_BASE_URL }.trimEnd('/')
+        return normalized.takeIf { it.startsWith("https://", ignoreCase = true) }
     }
 }

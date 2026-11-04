@@ -1,6 +1,7 @@
 package com.xjb.wenzhen.ui.screens
 
 import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
+import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import android.content.Intent
@@ -83,6 +84,8 @@ fun SettingsScreen(
     settings: AppSettings,
     onSave: (apiKey: String, model: String, baseUrl: String, thinkingLevel: ThinkingLevel, generateRecord: Boolean) -> Unit,
     onBack: () -> Unit,
+    offlineMode: Boolean = settings.offlineMode,
+    onOfflineModeChange: (Boolean) -> Unit = {},
     modifier: Modifier = Modifier,
     saveError: String? = null,
     onDismissError: () -> Unit = {},
@@ -115,6 +118,7 @@ fun SettingsScreen(
     var guideExpanded by rememberSaveable { mutableStateOf(initialGuideExpanded) }
     var thinkingLevel by rememberSaveable { mutableStateOf(settings.thinkingLevel) }
     var generateRecord by rememberSaveable { mutableStateOf(settings.generateRecord) }
+    var localOfflineMode by rememberSaveable { mutableStateOf(offlineMode) }
 
     fun selectedModel(): String = when (selectedModelIndex) {
         0 -> AppSettings.MODEL_FLASH
@@ -250,9 +254,8 @@ fun SettingsScreen(
                             localError = when {
                                 apiKey.isBlank() -> "请先填写 DeepSeek API Key。"
                                 selectedModelIndex == 2 && model.isBlank() -> "请填写自定义模型名称。"
-                                !baseUrl.trim().startsWith("https://") &&
-                                    !baseUrl.trim().startsWith("http://") ->
-                                    "Base URL 必须以 http:// 或 https:// 开头。"
+                                BaseUrlPolicy.normalizeHttps(baseUrl) == null ->
+                                    "Base URL 必须使用 HTTPS（以 https:// 开头）。"
                                 else -> null
                             }
                             if (localError == null) {
@@ -359,6 +362,19 @@ fun SettingsScreen(
                         }
                         Switch(checked = generateRecord, onCheckedChange = { generateRecord = it })
                     }
+                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("离线基础训练", style = MaterialTheme.typography.titleSmall)
+                            Text("使用内置病例练习，不调用 AI 服务", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(
+                            checked = localOfflineMode,
+                            onCheckedChange = {
+                                localOfflineMode = it
+                                onOfflineModeChange(it)
+                            },
+                        )
+                    }
                 }
             }
 
@@ -370,9 +386,8 @@ fun SettingsScreen(
                             selectedModelIndex == 2 && model.isBlank() -> {
                                 localError = "请填写自定义模型名称。"
                             }
-                            !baseUrl.trim().startsWith("https://") &&
-                                !baseUrl.trim().startsWith("http://") -> {
-                                localError = "Base URL 必须以 http:// 或 https:// 开头。"
+                            BaseUrlPolicy.normalizeHttps(baseUrl) == null -> {
+                                localError = "Base URL 必须使用 HTTPS（以 https:// 开头）。"
                             }
                             else -> {
                                 localError = null

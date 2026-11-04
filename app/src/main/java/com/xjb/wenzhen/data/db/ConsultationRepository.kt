@@ -8,4 +8,8 @@ class ConsultationRepository(private val dao: ConsultationDao) {
     suspend fun getById(id: Long): ConsultationEntity? = dao.getById(id)
 
     suspend fun save(entity: ConsultationEntity): Long = dao.insert(entity)
+
+    suspend fun delete(id: Long) = dao.deleteById(id)
+
+    suspend fun clear() = dao.deleteAll()
 }

@@ -2,6 +2,7 @@ package com.xjb.wenzhen.ui.screens
 
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,6 +57,7 @@ fun StatsScreen(
     isLoading: Boolean = false,
     errorMessage: String? = null,
     onRetry: () -> Unit = {},
+    onDepartmentClick: (String) -> Unit = {},
 ) {
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -101,7 +103,7 @@ fun StatsScreen(
             ) {
                 item { StatsHero(stats = stats) }
                 item { ScoreTrendCard(points = stats.trend) }
-                item { DepartmentAverageCard(items = stats.departmentAverages) }
+                item { DepartmentAverageCard(items = stats.departmentAverages, onDepartmentClick = onDepartmentClick) }
                 item { MissedQuestionsCard(items = stats.topMissedQuestions) }
                 item { StatsFootnote() }
             }
@@ -265,11 +267,19 @@ private fun ScoreTrendChart(points: List<ScoreTrendPoint>) {
 }
 
 @Composable
-private fun DepartmentAverageCard(items: List<DepartmentAverage>) {
-    StatsCard(title = "各科室平均分", subtitle = "按平均分从高到低") {
+private fun DepartmentAverageCard(
+    items: List<DepartmentAverage>,
+    onDepartmentClick: (String) -> Unit = {},
+) {
+    StatsCard(title = "各科室平均分", subtitle = "按平均分从高到低，点击查看该科室历史") {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items.forEach { item ->
-                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onDepartmentClick(item.department) },
+                    verticalArrangement = Arrangement.spacedBy(5.dp),
+                ) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
                             text = item.department,

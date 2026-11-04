@@ -34,6 +34,19 @@ jobs:
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      - name: Android lint
+        run: ./gradlew lintDebug --stacktrace
+
+      - name: Kotlin formatting sanity
+        run: |
+          if grep -rInP '\t| +$' app/src --include='*.kt'; then
+            echo "发现制表符或尾随空格，请先格式化 Kotlin 源码"
+            exit 1
+          fi
+
+      - name: Dependency vulnerability scan (OSV)
+        run: python3 tools/osv_scan.py
+
       - name: Assemble debug APK
         run: ./gradlew assembleDebug --stacktrace
 

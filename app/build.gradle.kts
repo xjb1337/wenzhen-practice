@@ -4,8 +4,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 5
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.2.2"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 6
+val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.0"
 val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 
 android {
@@ -77,6 +77,10 @@ android {
     }
 }
 
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+}
+
 dependencies {
     implementation(platform("androidx.compose:compose-bom:2024.09.03"))
     androidTestImplementation(platform("androidx.compose:compose-bom:2024.09.03"))
@@ -113,10 +117,15 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.13")
     testImplementation("io.github.takahirom.roborazzi:roborazzi:1.38.0")
     testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.38.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("androidx.room:room-testing:2.6.1")
+    testImplementation("androidx.test:runner:1.6.2")
 
     androidTestImplementation("androidx.test.ext:junit:1.2.1")
     androidTestImplementation("androidx.test.espresso:espresso-core:3.6.1")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.room:room-testing:2.6.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

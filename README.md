@@ -2,7 +2,7 @@
 
 一个面向中国医学生的原生 Android 问诊训练应用。使用 Kotlin、Jetpack Compose 与 Material3 构建，包名为 `com.xjb.wenzhen`。应用通过标准化病人病例模拟问诊，在结束对话后生成规范大病历并提供结构化点评。
 
-当前版本为 v1.2，`versionCode` 为 3。
+当前版本为 v1.3.0，`versionCode` 为 6。
 
 ## 功能
 
@@ -20,6 +20,7 @@
 - **测试连接**：保存 Key 后可发送 `max_tokens=1` 的最小请求，区分成功、401/403 Key 无效、402 余额不足、429 限流、网络错误、超时和服务端异常等中文提示。
 - **应用内更新**：从 GitHub Releases 的 `update.json` 检查版本，展示更新说明；下载 APK 后校验 SHA-256 与签名证书，再通过 FileProvider 和系统安装器安装。未授权未知来源时会跳转系统设置。
 - **历史记录**：使用 Room 保存病例、性格、对话、病历、评分和时间；历史列表可进入详情回看。
+- **问诊草稿与离线训练**：问诊过程会自动保存草稿；可在设置中开启离线基础训练，使用内置病例和本地规则完成无 API Key 练习。
 - **本地设置**：保存 DeepSeek API Key、模型、Base URL、思考强度和默认病历生成开关。默认模型为 `deepseek-flash`，旧 `deepseek-v4-flash` 会自动迁移；也可选择 `deepseek-v4-pro` 或填写自定义模型名。
 
 ## 数据库迁移

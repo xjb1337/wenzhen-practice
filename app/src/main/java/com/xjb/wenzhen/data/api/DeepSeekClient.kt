@@ -5,6 +5,7 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit
 
 class DeepSeekClient(
     private val httpClient: OkHttpClient = defaultHttpClient(),
+    private val enforceHttps: Boolean = true,
 ) : LlmClient {
 
     override suspend fun complete(
@@ -33,21 +35,35 @@ class DeepSeekClient(
             }
         }
         val request = request(config, payload, accept = "application/json")
-        try {
-            httpClient.newCall(request).execute().use { response ->
-                val body = response.body?.string().orEmpty()
-                if (!response.isSuccessful) {
-                    throw LlmException(httpErrorMessage(response.code, body))
+        var lastError: LlmException? = null
+        for (attempt in 1..MAX_ATTEMPTS) {
+            try {
+                return@withContext httpClient.newCall(request).execute().use { response ->
+                    val body = response.body?.string().orEmpty()
+                    if (!response.isSuccessful) {
+                        throw LlmException(httpErrorMessage(response.code, body))
+                    }
+                    parseContent(body)
                 }
-                parseContent(body)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: LlmException) {
+                lastError = error
+                if (attempt < MAX_ATTEMPTS && isRetryable(error)) {
+                    delay(backoffMillis(attempt))
+                } else {
+                    throw error
+                }
+            } catch (error: Exception) {
+                lastError = LlmException(networkErrorMessage(error), error)
+                if (attempt < MAX_ATTEMPTS) {
+                    delay(backoffMillis(attempt))
+                } else {
+                    throw lastError!!
+                }
             }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: LlmException) {
-            throw error
-        } catch (error: Exception) {
-            throw LlmException(networkErrorMessage(error), error)
         }
+        throw lastError ?: LlmException("AI 请求失败，请稍后重试。")
     }
 
     override suspend fun stream(
@@ -214,15 +230,26 @@ class DeepSeekClient(
         else -> "网络错误，无法连接 DeepSeek 服务，请检查网络后重试。"
     }
 
+    private fun isRetryable(error: LlmException): Boolean {
+        val message = error.message.orEmpty()
+        return message.contains("限流") ||
+            message.contains("暂时不可用") ||
+            message.contains("超时") ||
+            message.contains("网络错误")
+    }
+
+    private fun backoffMillis(attempt: Int): Long = 800L * attempt
+
     private fun completionUrl(baseUrl: String): String {
         val base = baseUrl.trim().ifBlank { "https://api.deepseek.com" }.trimEnd('/')
-        if (!base.startsWith("https://", ignoreCase = true)) {
+        if (enforceHttps && !base.startsWith("https://", ignoreCase = true)) {
             throw LlmException("接口地址必须以 https:// 开头，以免 API Key 明文传输。")
         }
         return if (base.endsWith("/chat/completions")) base else "$base/chat/completions"
     }
 
     companion object {
+        private const val MAX_ATTEMPTS = 3
         private val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

@@ -10,7 +10,7 @@ on:
       version_code:
         description: 'versionCode（整数）'
         required: true
-        default: '2'
+        default: '6'
         type: string
       release_notes:
         description: '发布说明（支持多行）'
@@ -42,10 +42,19 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
           VERSION_CODE: ${{ inputs.version_code }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version 必须为 X.Y.Z"; exit 1; }
           [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "version_code 必须为整数"; exit 1; }
           if git ls-remote --tags origin "refs/tags/v$VERSION" | grep -q .; then echo "tag v$VERSION 已存在"; exit 1; fi
+          PREV_TAG=$(gh release view --json tagName -q .tagName 2>/dev/null || true)
+          PREV_CODE=0
+          if [ -n "$PREV_TAG" ]; then
+            PREV_JSON=$(gh release download "$PREV_TAG" -p update.json -O - 2>/dev/null || true)
+            PREV_CODE=$(printf '%s' "$PREV_JSON" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("versionCode",0))' 2>/dev/null || echo 0)
+          fi
+          echo "上一个正式版本 versionCode=$PREV_CODE，本次 versionCode=$VERSION_CODE"
+          [ "$VERSION_CODE" -gt "$PREV_CODE" ] || { echo "version_code 必须大于上一个正式版本（$PREV_CODE）"; exit 1; }
       - name: Decode keystore
         env:
           KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}

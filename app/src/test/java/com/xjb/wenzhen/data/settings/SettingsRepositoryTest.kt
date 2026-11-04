@@ -19,4 +19,19 @@ class SettingsRepositoryTest {
     fun `专业模型名称保持不变`() {
         assertEquals("deepseek-v4-pro", normalizeModel("deepseek-v4-pro"))
     }
+
+    @Test
+    fun `HTTP Base URL 会被拒绝`() {
+        assertEquals(null, BaseUrlPolicy.normalizeHttps("http://api.test.com"))
+    }
+
+    @Test
+    fun `HTTPS Base URL 会去掉首尾空白和尾部斜杠`() {
+        assertEquals("https://api.test.com", BaseUrlPolicy.normalizeHttps("  https://api.test.com/  "))
+    }
+
+    @Test
+    fun `空 Base URL 使用默认地址`() {
+        assertEquals(AppSettings.DEFAULT_BASE_URL, BaseUrlPolicy.normalizeHttps("   "))
+    }
 }

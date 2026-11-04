@@ -297,7 +297,7 @@ class ScreenshotTest {
                 ),
             )
         }
-        composeRule.onNodeWithText("辅助检查 · 心电图").assertExists()
+        composeRule.onNodeWithText("辅助检查 · 心电图", substring = true).assertExists()
         composeRule.onNodeWithText("对话").assertExists()
         capture("result_transcript.png")
     }
