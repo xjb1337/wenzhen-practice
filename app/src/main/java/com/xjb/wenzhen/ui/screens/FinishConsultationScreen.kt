@@ -1,5 +1,8 @@
 package com.xjb.wenzhen.ui.screens
 
+import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -79,7 +82,9 @@ fun FinishConsultationScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
+                .padding(innerPadding)
+                .consumeWindowInsets(innerPadding)
+                .imePadding(),
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
@@ -188,7 +193,7 @@ fun FinishConsultationScreen(
                             diagnosis = it
                             localError = null
                         },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                         placeholder = { Text("例如：急性阑尾炎") },
                         minLines = 2,
                         maxLines = 4,
@@ -215,7 +220,7 @@ fun FinishConsultationScreen(
                     OutlinedTextField(
                         value = basis,
                         onValueChange = { basis = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                         placeholder = { Text("简要写下支持诊断的病史、查体或线索…") },
                         minLines = 4,
                         maxLines = 7,
@@ -230,7 +235,7 @@ fun FinishConsultationScreen(
                         Text("治疗方案", style = MaterialTheme.typography.titleMedium)
                         Text("选填", style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(start = 6.dp))
                     }
-                    OutlinedTextField(value = treatment, onValueChange = { treatment = it }, modifier = Modifier.fillMaxWidth(), placeholder = { Text("写下治疗原则、药物和随访…") }, minLines = 3, maxLines = 6, shape = RoundedCornerShape(16.dp))
+                    OutlinedTextField(value = treatment, onValueChange = { treatment = it }, modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(), placeholder = { Text("写下治疗原则、药物和随访…") }, minLines = 3, maxLines = 6, shape = RoundedCornerShape(16.dp))
                 }
             }
 

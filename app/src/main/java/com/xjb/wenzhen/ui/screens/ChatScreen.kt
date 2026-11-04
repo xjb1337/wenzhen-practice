@@ -1,5 +1,8 @@
 package com.xjb.wenzhen.ui.screens
 
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -121,6 +124,13 @@ fun ChatScreen(
 
     LaunchedEffect(messageCount) {
         if (messageCount > 0) {
+            listState.animateScrollToItem(messageCount)
+        }
+    }
+    // 输入法弹起时消息列表视口变小，自动滚到最新消息，避免最后几条被输入栏/键盘挡住。
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
+    LaunchedEffect(imeVisible) {
+        if (imeVisible && messageCount > 0) {
             listState.animateScrollToItem(messageCount)
         }
     }
