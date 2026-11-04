@@ -1,5 +1,10 @@
 package com.xjb.wenzhen.ui.screens
 
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.lazy.items
+import com.xjb.wenzhen.data.model.MessageDeliveryState
+import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.ChatMessage
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
@@ -64,6 +69,13 @@ import com.xjb.wenzhen.ui.theme.Warm
 enum class ResultTab {
     RECORD,
     REVIEW,
+    TRANSCRIPT,
+}
+
+internal fun availableResultTabs(hasRecord: Boolean, hasTranscript: Boolean): List<ResultTab> = buildList {
+    if (hasRecord) add(ResultTab.RECORD)
+    add(ResultTab.REVIEW)
+    if (hasTranscript) add(ResultTab.TRANSCRIPT)
 }
 
 @Composable
@@ -79,16 +91,22 @@ fun ResultScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
     initialTab: ResultTab = ResultTab.RECORD,
+    messages: List<ChatMessage> = emptyList(),
 ) {
-    var selectedTabIndex by rememberSaveable { mutableIntStateOf(initialTab.ordinal) }
+    val tabs = availableResultTabs(hasRecord = medicalRecord.isNotBlank(), hasTranscript = messages.isNotEmpty())
+    var selectedTabName by rememberSaveable { mutableStateOf(initialTab.name) }
+    val selectedTab = tabs.firstOrNull { it.name == selectedTabName } ?: tabs.first()
     val context = LocalContext.current
-    val showRecord = medicalRecord.isNotBlank() && selectedTabIndex == ResultTab.RECORD.ordinal
-    val currentText = if (showRecord) {
-        medicalRecord
-    } else {
-        scoreAsText(score)
+    val currentText = when (selectedTab) {
+        ResultTab.RECORD -> medicalRecord
+        ResultTab.REVIEW -> scoreAsText(score)
+        ResultTab.TRANSCRIPT -> transcriptAsText(messages)
     }
-    val copyLabel = if (showRecord) "病历已复制" else "点评已复制"
+    val copyLabel = when (selectedTab) {
+        ResultTab.RECORD -> "病历已复制"
+        ResultTab.REVIEW -> "点评已复制"
+        ResultTab.TRANSCRIPT -> "对话已复制"
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -149,20 +167,26 @@ fun ResultScreen(
                 score = score,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
-            if (medicalRecord.isBlank()) {
+            if (tabs.size == 1) {
                 ReviewTab(score = score, modifier = Modifier.weight(1f))
                 return@Column
             }
+            val selectedTabIndex = tabs.indexOf(selectedTab)
             TabRow(
                 selectedTabIndex = selectedTabIndex,
                 containerColor = MaterialTheme.colorScheme.background,
                 contentColor = MaterialTheme.colorScheme.primary,
                 divider = { HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant) },
             ) {
-                listOf("病历", "点评").forEachIndexed { index, title ->
+                tabs.forEachIndexed { index, tab ->
+                    val title = when (tab) {
+                        ResultTab.RECORD -> "病历"
+                        ResultTab.REVIEW -> "点评"
+                        ResultTab.TRANSCRIPT -> "对话"
+                    }
                     Tab(
                         selected = selectedTabIndex == index,
-                        onClick = { selectedTabIndex = index },
+                        onClick = { selectedTabName = tab.name },
                         text = {
                             Text(
                                 text = title,
@@ -176,10 +200,10 @@ fun ResultScreen(
                     )
                 }
             }
-            if (selectedTabIndex == ResultTab.RECORD.ordinal) {
-                RecordTab(medicalRecord = medicalRecord, modifier = Modifier.weight(1f))
-            } else {
-                ReviewTab(score = score, modifier = Modifier.weight(1f))
+            when (selectedTab) {
+                ResultTab.RECORD -> RecordTab(medicalRecord = medicalRecord, modifier = Modifier.weight(1f))
+                ResultTab.REVIEW -> ReviewTab(score = score, modifier = Modifier.weight(1f))
+                ResultTab.TRANSCRIPT -> TranscriptTab(messages = messages, modifier = Modifier.weight(1f))
             }
         }
     }
@@ -610,3 +634,59 @@ private fun scoreAsText(score: ScoreResult): String = buildString {
     appendLine("正确诊断：${score.correctDiagnosis}")
     appendLine(score.diagnosisExplanation)
 }
+
+@Composable
+private fun TranscriptTab(
+    messages: List<ChatMessage>,
+    modifier: Modifier = Modifier,
+) {
+    LazyColumn(
+        modifier = modifier.fillMaxWidth(),
+        contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(messages) { message ->
+            val isDoctor = message.role == MessageRole.DOCTOR
+            val isSystem = message.role == MessageRole.SYSTEM
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = when {
+                    isSystem -> Alignment.CenterHorizontally
+                    isDoctor -> Alignment.End
+                    else -> Alignment.Start
+                },
+            ) {
+                Text(
+                    text = transcriptSpeaker(message),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                )
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = when {
+                        isSystem -> MaterialTheme.colorScheme.secondaryContainer
+                        isDoctor -> MaterialTheme.colorScheme.primaryContainer
+                        else -> MaterialTheme.colorScheme.surfaceVariant
+                    },
+                    modifier = Modifier.fillMaxWidth(if (isSystem) 1f else 0.85f),
+                ) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun transcriptSpeaker(message: ChatMessage): String = when (message.role) {
+    MessageRole.DOCTOR -> if (message.deliveryState == MessageDeliveryState.FAILED) "医生（发送失败）" else "医生"
+    MessageRole.PATIENT -> "患者"
+    MessageRole.SYSTEM -> message.systemTitle ?: "检查结果"
+}
+
+internal fun transcriptAsText(messages: List<ChatMessage>): String =
+    messages.joinToString("\n") { "${transcriptSpeaker(it)}：${it.content}" }

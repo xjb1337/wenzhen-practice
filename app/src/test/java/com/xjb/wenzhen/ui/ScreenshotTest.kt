@@ -1,5 +1,6 @@
 package com.xjb.wenzhen.ui
 
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -284,6 +285,24 @@ class ScreenshotTest {
     }
 
     @Test
+    fun resultTranscriptScreenshot() {
+        setScreen {
+            SampleResultScreen(
+                initialTab = ResultTab.TRANSCRIPT,
+                messages = listOf(
+                    ChatMessage(MessageRole.PATIENT, medicalCase.openingLine, 1_700_000_000_000),
+                    ChatMessage(MessageRole.DOCTOR, "您胸痛多久了？有没有放射痛、出汗或恶心？", 1_700_000_010_000),
+                    ChatMessage(MessageRole.PATIENT, "大概三个小时了，左肩有点酸，出了很多汗。", 1_700_000_020_000),
+                    ChatMessage(MessageRole.SYSTEM, "心电图：V1-V4 导联 ST 段抬高。", 1_700_000_030_000, systemTitle = "辅助检查 · 心电图"),
+                ),
+            )
+        }
+        composeRule.onNodeWithText("辅助检查 · 心电图").assertExists()
+        composeRule.onNodeWithText("对话").assertExists()
+        capture("result_transcript.png")
+    }
+
+    @Test
     fun resultReviewScreenshot() {
         setScreen {
             SampleResultScreen(initialTab = ResultTab.REVIEW)
@@ -356,7 +375,7 @@ class ScreenshotTest {
     }
 
     @Composable
-    private fun SampleResultScreen(initialTab: ResultTab) {
+    private fun SampleResultScreen(initialTab: ResultTab, messages: List<ChatMessage> = emptyList()) {
         ResultScreen(
             caseTitle = medicalCase.title,
             patientName = medicalCase.patient.name,
@@ -368,6 +387,7 @@ class ScreenshotTest {
             initialDiagnosis = "急性心肌梗死",
             onBack = {},
             initialTab = initialTab,
+            messages = messages,
         )
     }
 

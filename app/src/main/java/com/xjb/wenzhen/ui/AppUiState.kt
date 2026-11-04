@@ -26,6 +26,7 @@ data class ResultViewData(
     val initialDiagnosis: String,
     val treatmentAnswer: String = "",
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
+    val messages: List<ChatMessage> = emptyList(),
 )
 
 data class AppUiState(
