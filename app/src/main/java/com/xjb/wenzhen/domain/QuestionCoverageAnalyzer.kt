@@ -2,7 +2,6 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.MedicalCase
-import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 
 data class QuestionEvidence(
@@ -17,11 +16,15 @@ data class QuestionEvidence(
 /**
  * 用病例自己的 keyQuestions 做一层保守的本地校验，纠正模型把明显问到的问题列为遗漏。
  * 它不替代教师或 LLM 的语义判断，只作为评分结果的安全下限。
+ *
+ * 证据编号统一使用 [PromptBuilder.transcriptEntries] 的 1-based 下标（与评分转写同一口径），
+ * 不再使用全量 messages 的 0-based 绝对下标。
  */
 object QuestionCoverageAnalyzer {
     fun analyze(medicalCase: MedicalCase, messages: List<ChatMessage>): List<QuestionEvidence> {
-        val usable = messages.withIndex()
-            .filter { it.value.role == MessageRole.DOCTOR && it.value.deliveryState == MessageDeliveryState.SENT }
+        val transcript = transcriptEntries(messages)
+        val usable = transcript.withIndex()
+            .filter { it.value.role == MessageRole.DOCTOR }
         val text = usable.joinToString("\n") { it.value.content.lowercase() }
         return KeyQuestionCatalog.of(medicalCase).map { spec ->
             val question = spec.text
@@ -30,7 +33,7 @@ object QuestionCoverageAnalyzer {
             val covered = terms.any { text.contains(it) }
             val indexes = if (covered) {
                 usable.filter { (_, message) -> terms.any { message.content.lowercase().contains(it) } }
-                    .map { it.index }
+                    .map { it.index + 1 }
             } else {
                 emptyList()
             }

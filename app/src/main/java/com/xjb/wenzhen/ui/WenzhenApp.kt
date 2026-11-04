@@ -124,6 +124,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
             composable(Routes.LIBRARY) {
                 CaseLibraryScreen(
                     cases = uiState.filteredCases,
+                    allCases = uiState.cases,
                     selectedDepartment = uiState.selectedDepartment,
                     hasApiKey = uiState.hasApiKey,
                     builtInCount = uiState.builtInCaseCount,
@@ -198,6 +199,8 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onDismissUpdate = viewModel::dismissUpdateDialog,
                     currentVersionName = uiState.currentVersionName,
                     currentVersionCode = uiState.currentVersionCode,
+                    theme = uiState.settings.theme,
+                    onThemeChange = viewModel::setTheme,
                 )
             }
             composable(Routes.CHAT) {

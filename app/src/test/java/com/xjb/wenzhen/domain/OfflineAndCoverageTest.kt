@@ -37,7 +37,8 @@ class OfflineAndCoverageTest {
         val evidence = QuestionCoverageAnalyzer.analyze(medicalCase, messages)
         val hit = evidence.first { it.question == question }
         assertTrue(hit.covered)
-        assertTrue(hit.messageIndexes.contains(1))
+        // 证据编号与评分转写同一口径：1-based，且医生问题是转写里的第 2 条。
+        assertEquals(listOf(2), hit.messageIndexes)
     }
 
     @Test

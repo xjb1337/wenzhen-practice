@@ -8,7 +8,11 @@ import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
 import com.xjb.wenzhen.data.api.LlmClient
 import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
+import com.xjb.wenzhen.data.db.ConsultationDraftEntity
+import com.xjb.wenzhen.data.db.ConversationJsonCodec
+import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
@@ -17,11 +21,13 @@ import com.xjb.wenzhen.data.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -52,8 +58,12 @@ class AppViewModelTest {
 
     @After
     fun tearDown() {
+        // P0-6：先取消所有 ViewModel 协程并把测试调度器跑空，再切到 IO 线程关闭数据库。
+        // 直接在 Robolectric 主线程 close() 会和 Room 的 InvalidationTracker 刷新协程互相持锁，
+        // 出现 "Found one Java-level deadlock"（arch_disk_io 等 ReadLock、主线程等 ProcessLock）。
         store.clear()
-        db.close()
+        dispatcher.scheduler.advanceUntilIdle()
+        runBlocking { withContext(Dispatchers.IO) { db.close() } }
         Dispatchers.resetMain()
     }
 
@@ -145,6 +155,46 @@ class AppViewModelTest {
         assertEquals(MessageDeliveryState.FAILED, doctor.deliveryState)
         assertEquals(false, vm.uiState.value.isPatientTyping)
         assertTrue(vm.uiState.value.requestNotice.orEmpty().contains("已取消"))
+    }
+
+    @Test
+    fun `恢复中断草稿会丢弃半截患者回复并把医生提问标记为可重试`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(
+                listOf(
+                    ChatMessage(role = MessageRole.PATIENT, content = medicalCase.openingLine),
+                    ChatMessage(
+                        role = MessageRole.DOCTOR,
+                        content = "疼痛多久了？",
+                        deliveryState = MessageDeliveryState.SENDING,
+                    ),
+                    ChatMessage(
+                        role = MessageRole.PATIENT,
+                        content = "大概三",
+                        deliveryState = MessageDeliveryState.SENDING,
+                    ),
+                ),
+            ),
+            patientPersonality = "COOPERATIVE",
+            encounterType = "OUTPATIENT",
+            startedAt = 1_000L,
+            updatedAt = 2_000L,
+        )
+        val container = AppContainer(context, overrideLlmClient = SuccessClient(), overrideDatabase = db)
+        val vm = AppViewModel(container, AppUiState(settings = apiSettings(), draft = draft))
+        store.put("vm-draft", vm)
+
+        vm.resumeDraft()
+
+        val messages = vm.uiState.value.messages
+        assertEquals(2, messages.size)
+        assertEquals(MessageDeliveryState.SENT, messages[0].deliveryState)
+        assertEquals(MessageRole.DOCTOR, messages[1].role)
+        assertEquals(MessageDeliveryState.FAILED, messages[1].deliveryState)
+        assertTrue(messages.none { it.role == MessageRole.PATIENT && it.deliveryState == MessageDeliveryState.SENDING })
+        assertEquals(false, vm.uiState.value.isPatientTyping)
     }
 
     private class SuccessClient(private val reply: String = "收到。") : LlmClient {

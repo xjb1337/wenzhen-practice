@@ -65,6 +65,8 @@ import com.xjb.wenzhen.ui.components.LoadingState
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.components.formatDateTime
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import com.xjb.wenzhen.util.HistoryExporter
@@ -350,7 +352,7 @@ private fun HistorySummary(records: List<ConsultationEntity>) {
         modifier = Modifier
             .fillMaxWidth()
             .background(
-                Brush.linearGradient(listOf(TealPrimary, TealSecondary)),
+                Brush.linearGradient(listOf(GradientStart, GradientEnd)),
                 RoundedCornerShape(22.dp),
             )
             .padding(18.dp),

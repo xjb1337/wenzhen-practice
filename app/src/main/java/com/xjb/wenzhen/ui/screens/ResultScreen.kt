@@ -62,6 +62,8 @@ import com.xjb.wenzhen.ui.components.formatDateTime
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.Rose
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import com.xjb.wenzhen.ui.theme.Warm
@@ -248,7 +250,7 @@ private fun ResultHeader(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(24.dp))
-            .background(Brush.linearGradient(listOf(TealPrimary, TealSecondary)))
+            .background(Brush.linearGradient(listOf(GradientStart, GradientEnd)))
             .padding(18.dp),
     ) {
         Row(

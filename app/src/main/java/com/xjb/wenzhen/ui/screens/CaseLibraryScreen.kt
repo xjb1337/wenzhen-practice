@@ -6,19 +6,24 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
@@ -49,6 +54,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.xjb.wenzhen.data.model.CaseGenerationDepartments
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
@@ -62,6 +68,8 @@ import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
+import com.xjb.wenzhen.ui.theme.GradientStart
+import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 
@@ -71,6 +79,8 @@ fun CaseLibraryScreen(
     selectedDepartment: String,
     hasApiKey: Boolean,
     builtInCount: Int,
+    // 全量病例（未按科室筛选），用于筛选行补齐「仅 AI 生成」科室里已经生成的病例。
+    allCases: List<MedicalCase> = cases,
     onDepartmentSelected: (String) -> Unit = {},
     onCaseSelected: (MedicalCase, PatientPersonality, EncounterType) -> Unit = { _, _, _ -> },
     savedCaseIds: Set<String> = emptySet(),
@@ -178,6 +188,7 @@ fun CaseLibraryScreen(
                         DepartmentFilterRow(
                             selectedDepartment = selectedDepartment,
                             onDepartmentSelected = onDepartmentSelected,
+                            allCases = allCases,
                         )
                     }
                 }
@@ -249,7 +260,7 @@ private fun PracticeHero(builtInCount: Int) {
             .clip(RoundedCornerShape(26.dp))
             .background(
                 Brush.linearGradient(
-                    colors = listOf(TealPrimary, TealSecondary),
+                    colors = listOf(GradientStart, GradientEnd),
                 )
             )
             .padding(horizontal = 22.dp, vertical = 22.dp),
@@ -377,12 +388,21 @@ private fun AiCaseCard(
 private fun DepartmentFilterRow(
     selectedDepartment: String,
     onDepartmentSelected: (String) -> Unit,
+    allCases: List<MedicalCase> = emptyList(),
 ) {
+    // 内置 30 科室（Departments.all，含「全部」）固定展示；AI 生成的「仅 AI 专属」科室
+    // 不在 Departments.all 中，只有真正生成过病例才补进筛选行，避免出现 0 例空 chip。
+    val extraDepartments = allCases
+        .map { it.department }
+        .filter { it.isNotBlank() && it != Departments.ALL && it !in Departments.all }
+        .distinct()
+        .sorted()
+    val departmentItems = Departments.all + extraDepartments
     LazyRow(
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         contentPadding = PaddingValues(end = 4.dp),
     ) {
-        items(Departments.all) { department ->
+        items(departmentItems) { department ->
             FilterChip(
                 selected = selectedDepartment == department,
                 onClick = { onDepartmentSelected(department) },
@@ -514,6 +534,11 @@ private fun CaseCard(
     }
 }
 
+/**
+ * 8 个系统分组共 54 个科室：内置 30（Departments.all）+ 仅 AI 生成 24。
+ * 分组是纯 UI 局部状态，不写回 selectedDepartment、不进 AppUiState。
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GenerateCaseDialog(
     hasApiKey: Boolean,
@@ -523,7 +548,14 @@ private fun GenerateCaseDialog(
     onGenerate: (String, Difficulty, PatientPersonality, EncounterType) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
+    val groups = CaseGenerationDepartments.groups
     var department by rememberSaveable { mutableStateOf(initialDepartment) }
+    var groupLabel by rememberSaveable {
+        mutableStateOf(
+            CaseGenerationDepartments.groupOf(initialDepartment)?.label
+                ?: groups.first().label
+        )
+    }
     var difficulty by rememberSaveable { mutableStateOf(Difficulty.MEDIUM) }
     var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
     var encounterType by rememberSaveable { mutableStateOf(EncounterType.OUTPATIENT) }
@@ -532,16 +564,45 @@ private fun GenerateCaseDialog(
         onDismissRequest = onDismiss,
         title = { Text("AI 随机生成病例") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            // 真机基线 review/screenshots/baseline-ai-dialog.png：1920×1080 横屏下原对话框已占大半屏，
+            // 增加分组行后必须限高 + 可滚动，否则「就诊类型 / 生成按钮」被挤出可视区。
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 360.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
                 Text(
                     text = "选择科室与难度，DeepSeek 会生成一份带隐藏资料的标准化病人病例。",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("科室分组", style = MaterialTheme.typography.titleSmall)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        items(groups, key = { it.label }) { group ->
+                            FilterChip(
+                                selected = groupLabel == group.label,
+                                onClick = {
+                                    groupLabel = group.label
+                                    // 切分组时同步把科室设为本组首项，保证「选中态 / 症候参考 / 生成参数」三者一致。
+                                    department = group.departments.first()
+                                },
+                                label = { Text("${group.label} (${group.departments.size})") },
+                                shape = CircleShape,
+                            )
+                        }
+                    }
+                }
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("科室", style = MaterialTheme.typography.titleSmall)
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                        items(Departments.all.filter { it != Departments.ALL }) { item ->
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(7.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        groups.first { it.label == groupLabel }.departments.forEach { item ->
                             FilterChip(
                                 selected = department == item,
                                 onClick = { department = item },
@@ -550,7 +611,15 @@ private fun GenerateCaseDialog(
                             )
                         }
                     }
+                    // 症候提示摘要：只取第一段，避免把红旗里的诊断名直接展示给正在练问诊的用户。
+                    Text(
+                        text = "症候参考：" +
+                            CaseGenerationDepartments.hintFor(department).substringBefore("；"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
+
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("难度", style = MaterialTheme.typography.titleSmall)
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {

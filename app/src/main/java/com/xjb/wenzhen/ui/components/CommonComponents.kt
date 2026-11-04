@@ -14,12 +14,20 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Air
 import androidx.compose.material.icons.outlined.ArrowBack
+import androidx.compose.material.icons.outlined.Biotech
+import androidx.compose.material.icons.outlined.Bloodtype
 import androidx.compose.material.icons.outlined.ChildCare
+import androidx.compose.material.icons.outlined.Coronavirus
+import androidx.compose.material.icons.outlined.Elderly
 import androidx.compose.material.icons.outlined.Favorite
 import androidx.compose.material.icons.outlined.Healing
+import androidx.compose.material.icons.outlined.LocalFireDepartment
 import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material.icons.outlined.MedicalServices
+import androidx.compose.material.icons.outlined.MonitorHeart
+import androidx.compose.material.icons.outlined.Mood
 import androidx.compose.material.icons.outlined.PregnantWoman
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Restaurant
@@ -44,14 +52,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import com.xjb.wenzhen.data.model.CaseGenerationDepartments
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.ui.theme.BlueSoft
+import com.xjb.wenzhen.ui.theme.FixedBrandColors
 import com.xjb.wenzhen.ui.theme.IndigoSoft
 import com.xjb.wenzhen.ui.theme.Rose
 import com.xjb.wenzhen.ui.theme.TealContainer
-import com.xjb.wenzhen.ui.theme.TealPrimary
-import com.xjb.wenzhen.ui.theme.TealSecondary
 import com.xjb.wenzhen.ui.theme.Warm
 import java.time.Instant
 import java.time.ZoneId
@@ -284,48 +292,110 @@ fun DepartmentMark(
     }
 }
 
-fun departmentIcon(department: String): ImageVector = when (department) {
-    Departments.CARDIOLOGY -> Icons.Outlined.Favorite
-    Departments.RESPIRATORY -> Icons.Outlined.WaterDrop
-    Departments.GASTROENTEROLOGY -> Icons.Outlined.Restaurant
-    Departments.NEUROLOGY -> Icons.Outlined.Psychology
-    Departments.ENDOCRINOLOGY -> Icons.Outlined.WaterDrop
-    Departments.NEPHROLOGY -> Icons.Outlined.WaterDrop
-    Departments.HEMATOLOGY -> Icons.Outlined.Favorite
-    Departments.RHEUMATOLOGY -> Icons.Outlined.Healing
-    Departments.INFECTIOUS_DISEASE -> Icons.Outlined.LocalHospital
-    Departments.GENERAL_SURGERY -> Icons.Outlined.MedicalServices
-    Departments.ORTHOPEDICS -> Icons.Outlined.MedicalServices
-    Departments.UROLOGY -> Icons.Outlined.WaterDrop
-    Departments.OBSTETRICS_GYNECOLOGY -> Icons.Outlined.PregnantWoman
-    Departments.PEDIATRICS -> Icons.Outlined.ChildCare
-    Departments.PSYCHIATRY -> Icons.Outlined.Psychology
-    Departments.ENT -> Icons.Outlined.LocalHospital
-    Departments.OPHTHALMOLOGY -> Icons.Outlined.LocalHospital
-    Departments.DERMATOLOGY -> Icons.Outlined.Healing
-    else -> Icons.Outlined.LocalHospital
+/** 12 个新增内置科室的固定语义色（不随皮肤漂移，与既有 18 科室一致）。 */
+private object NewDepartmentColors {
+    val Anorectal = Color(0xFF7B1FA2)
+    val Emergency = Color(0xFFD32F2F)
+    val Thoracic = Color(0xFF455A64)
+    val Neurosurgery = Color(0xFF3949AB)
+    val Vascular = Color(0xFFC2185B)
+    val Breast = Color(0xFF880E4F)
+    val Cardiac = Color(0xFFB71C1C)
+    val Geriatrics = Color(0xFF6D4C41)
+    val Oncology = Color(0xFF4527A0)
+    val Oral = Color(0xFF00695C)
+    val Burn = Color(0xFFE65100)
+    val Allergy = Color(0xFF827717)
 }
 
-fun departmentForeground(department: String): Color = when (department) {
-    Departments.CARDIOLOGY -> Rose
-    Departments.GASTROENTEROLOGY -> Warm
-    Departments.RESPIRATORY -> TealSecondary
-    Departments.NEUROLOGY -> Color(0xFF5E6BC7)
-    Departments.ENDOCRINOLOGY -> Color(0xFF00838F)
-    Departments.NEPHROLOGY -> Color(0xFF00838F)
-    Departments.HEMATOLOGY -> Color(0xFFC62828)
-    Departments.RHEUMATOLOGY -> Color(0xFF6A1B9A)
-    Departments.INFECTIOUS_DISEASE -> Color(0xFFEF6C00)
-    Departments.GENERAL_SURGERY -> Color(0xFF1565C0)
-    Departments.ORTHOPEDICS -> Color(0xFF5D4037)
-    Departments.UROLOGY -> Color(0xFF1976D2)
-    Departments.OBSTETRICS_GYNECOLOGY -> Color(0xFFAD1457)
-    Departments.PEDIATRICS -> Color(0xFFEF6C00)
-    Departments.PSYCHIATRY -> Color(0xFF5E6BC7)
-    Departments.ENT -> Color(0xFF00796B)
-    Departments.OPHTHALMOLOGY -> Color(0xFF00838F)
-    Departments.DERMATOLOGY -> Color(0xFF8D6E63)
-    else -> TealPrimary
+/**
+ * 纯函数，不能读 CompositionLocal，因此新增科室沿用固定语义色。
+ * 「仅 AI 生成」的 24 个科室按 8 个系统分组取图标/配色，避免全走兜底。
+ */
+fun departmentIcon(department: String): ImageVector {
+    if (department in CaseGenerationDepartments.aiOnly) {
+        return when (CaseGenerationDepartments.groupOf(department)?.label) {
+            "妇儿与生殖" -> Icons.Outlined.PregnantWoman
+            "五官皮肤口腔" -> Icons.Outlined.Healing
+            "急危重症与麻醉" -> Icons.Outlined.WarningAmber
+            "精神康复与缓和" -> Icons.Outlined.Psychology
+            "诊断与介入支撑" -> Icons.Outlined.Biotech
+            "职业与遗传" -> Icons.Outlined.Coronavirus
+            else -> Icons.Outlined.MedicalServices
+        }
+    }
+    return when (department) {
+        Departments.CARDIOLOGY -> Icons.Outlined.Favorite
+        Departments.RESPIRATORY -> Icons.Outlined.WaterDrop
+        Departments.GASTROENTEROLOGY -> Icons.Outlined.Restaurant
+        Departments.NEUROLOGY -> Icons.Outlined.Psychology
+        Departments.ENDOCRINOLOGY -> Icons.Outlined.WaterDrop
+        Departments.NEPHROLOGY -> Icons.Outlined.WaterDrop
+        Departments.HEMATOLOGY -> Icons.Outlined.Favorite
+        Departments.RHEUMATOLOGY -> Icons.Outlined.Healing
+        Departments.INFECTIOUS_DISEASE -> Icons.Outlined.LocalHospital
+        Departments.GENERAL_SURGERY -> Icons.Outlined.MedicalServices
+        Departments.ORTHOPEDICS -> Icons.Outlined.MedicalServices
+        Departments.UROLOGY -> Icons.Outlined.WaterDrop
+        Departments.OBSTETRICS_GYNECOLOGY -> Icons.Outlined.PregnantWoman
+        Departments.PEDIATRICS -> Icons.Outlined.ChildCare
+        Departments.PSYCHIATRY -> Icons.Outlined.Psychology
+        Departments.ENT -> Icons.Outlined.LocalHospital
+        Departments.OPHTHALMOLOGY -> Icons.Outlined.LocalHospital
+        Departments.DERMATOLOGY -> Icons.Outlined.Healing
+        Departments.ANORECTAL_SURGERY -> Icons.Outlined.MedicalServices
+        Departments.EMERGENCY -> Icons.Outlined.WarningAmber
+        Departments.THORACIC_SURGERY -> Icons.Outlined.Air
+        Departments.NEUROSURGERY -> Icons.Outlined.Psychology
+        Departments.VASCULAR_SURGERY -> Icons.Outlined.Bloodtype
+        Departments.BREAST_SURGERY -> Icons.Outlined.Favorite
+        Departments.CARDIAC_SURGERY -> Icons.Outlined.MonitorHeart
+        Departments.GERIATRICS -> Icons.Outlined.Elderly
+        Departments.ONCOLOGY -> Icons.Outlined.Biotech
+        Departments.ORAL_MAXILLOFACIAL -> Icons.Outlined.Mood
+        Departments.BURN -> Icons.Outlined.LocalFireDepartment
+        Departments.ALLERGY -> Icons.Outlined.Coronavirus
+        else -> Icons.Outlined.LocalHospital
+    }
+}
+
+fun departmentForeground(department: String): Color {
+    if (department in CaseGenerationDepartments.aiOnly) {
+        return Color(CaseGenerationDepartments.colorOf(department))
+    }
+    return when (department) {
+        Departments.CARDIOLOGY -> Rose
+        Departments.GASTROENTEROLOGY -> Warm
+        Departments.RESPIRATORY -> FixedBrandColors.Secondary
+        Departments.NEUROLOGY -> Color(0xFF5E6BC7)
+        Departments.ENDOCRINOLOGY -> Color(0xFF00838F)
+        Departments.NEPHROLOGY -> Color(0xFF00838F)
+        Departments.HEMATOLOGY -> Color(0xFFC62828)
+        Departments.RHEUMATOLOGY -> Color(0xFF6A1B9A)
+        Departments.INFECTIOUS_DISEASE -> Color(0xFFEF6C00)
+        Departments.GENERAL_SURGERY -> Color(0xFF1565C0)
+        Departments.ORTHOPEDICS -> Color(0xFF5D4037)
+        Departments.UROLOGY -> Color(0xFF1976D2)
+        Departments.OBSTETRICS_GYNECOLOGY -> Color(0xFFAD1457)
+        Departments.PEDIATRICS -> Color(0xFFEF6C00)
+        Departments.PSYCHIATRY -> Color(0xFF5E6BC7)
+        Departments.ENT -> Color(0xFF00796B)
+        Departments.OPHTHALMOLOGY -> Color(0xFF00838F)
+        Departments.DERMATOLOGY -> Color(0xFF8D6E63)
+        Departments.ANORECTAL_SURGERY -> NewDepartmentColors.Anorectal
+        Departments.EMERGENCY -> NewDepartmentColors.Emergency
+        Departments.THORACIC_SURGERY -> NewDepartmentColors.Thoracic
+        Departments.NEUROSURGERY -> NewDepartmentColors.Neurosurgery
+        Departments.VASCULAR_SURGERY -> NewDepartmentColors.Vascular
+        Departments.BREAST_SURGERY -> NewDepartmentColors.Breast
+        Departments.CARDIAC_SURGERY -> NewDepartmentColors.Cardiac
+        Departments.GERIATRICS -> NewDepartmentColors.Geriatrics
+        Departments.ONCOLOGY -> NewDepartmentColors.Oncology
+        Departments.ORAL_MAXILLOFACIAL -> NewDepartmentColors.Oral
+        Departments.BURN -> NewDepartmentColors.Burn
+        Departments.ALLERGY -> NewDepartmentColors.Allergy
+        else -> FixedBrandColors.Primary
+    }
 }
 
 fun departmentBackground(department: String): Color =

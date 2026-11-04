@@ -4,8 +4,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 6
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.0"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 7
+val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.1"
 val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 
 android {
