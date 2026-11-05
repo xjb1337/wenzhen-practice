@@ -69,7 +69,11 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x gradlew
-          ./gradlew testDebugUnitTest assembleRelease -PversionName="${{ inputs.version }}" -PversionCode="${{ inputs.version_code }}" --stacktrace
+          # 分开执行：同一个 Gradle 调用里 testDebugUnitTest + assembleRelease 会因
+          # org.gradle.parallel=true 让 Robolectric/Room 测试与 release dex/lint 任务争抢
+          # 2 核 runner，曾出现 testDebugUnitTest 卡住 28 分钟直到 job 超时。
+          ./gradlew testDebugUnitTest --stacktrace
+          ./gradlew assembleRelease -PversionName="${{ inputs.version }}" -PversionCode="${{ inputs.version_code }}" --stacktrace
       - name: Verify signature and checksum
         env:
           EXPECTED_CERT: ${{ secrets.ANDROID_EXPECTED_CERT_SHA256 }}
