@@ -26,9 +26,10 @@ import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import com.xjb.wenzhen.data.update.UpdateCheckResult
+import com.xjb.wenzhen.domain.CaseGenerationSelection
+import com.xjb.wenzhen.domain.OfflinePracticeService
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
-import com.xjb.wenzhen.domain.OfflinePracticeService
 import com.xjb.wenzhen.ui.theme.AppTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -542,12 +543,7 @@ class AppViewModel(
         }
     }
 
-    fun generateCase(
-        department: String,
-        difficulty: Difficulty,
-        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
-        encounterType: EncounterType = EncounterType.OUTPATIENT,
-    ) {
+    fun generateCase(selection: CaseGenerationSelection) {
         val state = _uiState.value
         if (state.isGeneratingCase) return
         if (!state.hasApiKey) {
@@ -563,12 +559,13 @@ class AppViewModel(
         }
         viewModelScope.launch {
             try {
+                val resolved = selection.resolve()
                 val (generated, finalPersonality) = container.caseGenerationService.generate(
                     config = state.settings.toLlmConfig(),
-                    department = department,
-                    difficulty = difficulty,
-                    personality = personality,
-                    encounterType = encounterType,
+                    department = resolved.department,
+                    difficulty = resolved.difficulty,
+                    personality = resolved.personality,
+                    encounterType = resolved.encounterType,
                 )
                 _uiState.update { latest ->
                     latest.copy(
@@ -584,7 +581,7 @@ class AppViewModel(
                         createdAt = System.currentTimeMillis(),
                     )
                 )
-                openCase(generated, finalPersonality, encounterType)
+                openCase(generated, finalPersonality, resolved.encounterType)
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -594,6 +591,22 @@ class AppViewModel(
                 }
             }
         }
+    }
+
+    fun generateCase(
+        department: String,
+        difficulty: Difficulty,
+        personality: PatientPersonality = PatientPersonality.COOPERATIVE,
+        encounterType: EncounterType = EncounterType.OUTPATIENT,
+    ) {
+        generateCase(
+            CaseGenerationSelection(
+                department = department,
+                difficulty = difficulty,
+                personality = personality,
+                encounterType = encounterType,
+            )
+        )
     }
 
     fun clearGenerationError() {
