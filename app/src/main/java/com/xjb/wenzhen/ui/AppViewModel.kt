@@ -65,6 +65,12 @@ class AppViewModel(
 
     private var historyJob: Job? = null
     private var draftSaveJob: Job? = null
+    /**
+     * 只有「进行中的问诊」才允许自动保存草稿。问诊结束并生成结果后置为 false，
+     * 否则结果页退到后台时 onStop() 的 flushDraft() 会把刚结束的对话重新写回草稿，
+     * 首页就会再次出现「发现未完成的问诊」。
+     */
+    private var draftPersistenceEnabled = true
     private var savedCaseJob: Job? = null
     private var patientReplyJob: Job? = null
     private var clinicalJob: Job? = null
@@ -84,6 +90,7 @@ class AppViewModel(
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
         encounterType: EncounterType = EncounterType.OUTPATIENT,
     ) {
+        draftPersistenceEnabled = true
         val startedAt = System.currentTimeMillis()
         val doctorOpeningMessage = ChatMessage(
             role = MessageRole.DOCTOR,
@@ -128,6 +135,7 @@ class AppViewModel(
 
     fun resumeDraft() {
         val draft = _uiState.value.draft ?: return
+        draftPersistenceEnabled = true
         val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return
         val messages = ensureDoctorOpening(
             reconcileRecoveredConversation(ConversationJsonCodec.decode(draft.conversationJson)),
@@ -177,6 +185,9 @@ class AppViewModel(
     }
 
     fun discardDraft() {
+        draftPersistenceEnabled = false
+        draftSaveJob?.cancel()
+        draftSaveJob = null
         viewModelScope.launch { container.consultationDraftRepository.clear() }
         _uiState.update { it.copy(draft = null) }
     }
@@ -746,10 +757,13 @@ class AppViewModel(
                         currentResult = result,
                     )
                 }
-                if (score != null) {
-                    container.consultationDraftRepository.clear()
-                    _uiState.update { it.copy(draft = null) }
-                }
+                // 只要走到了结果页，本次问诊就已经结束：即使评分生成失败、只展示了病历，
+                // 也必须清掉草稿，并停止后续 onStop/flushDraft 再把它写回来。
+                draftPersistenceEnabled = false
+                draftSaveJob?.cancel()
+                draftSaveJob = null
+                container.consultationDraftRepository.clear()
+                _uiState.update { it.copy(draft = null) }
                 _events.send(AppEvent.OpenResult)
             } catch (error: Exception) {
                 _uiState.update {
@@ -1056,7 +1070,17 @@ class AppViewModel(
 
     private fun observeDraft() {
         viewModelScope.launch {
-            _uiState.update { it.copy(draft = container.consultationDraftRepository.get()) }
+            val draft = container.consultationDraftRepository.get()
+            if (draft != null &&
+                container.consultationRepository.findCompletedAfter(draft.caseJson, draft.startedAt) != null
+            ) {
+                // v1.3.2 及更早版本在结果页退后台时可能把已完成的问诊写回草稿；
+                // 同一病例在草稿开始之后已有完成记录，说明这是完成后的残留，启动时直接清掉。
+                container.consultationDraftRepository.clear()
+                _uiState.update { it.copy(draft = null) }
+            } else {
+                _uiState.update { it.copy(draft = draft) }
+            }
         }
     }
 
@@ -1086,6 +1110,7 @@ class AppViewModel(
     }
 
     private fun scheduleDraftSave() {
+        if (!draftPersistenceEnabled) return
         draftSaveJob?.cancel()
         draftSaveJob = viewModelScope.launch {
             delay(350)
@@ -1095,12 +1120,14 @@ class AppViewModel(
 
     /** App 退到后台/可能被系统回收前调用：跳过 350ms 防抖，立即把当前对话写入草稿。 */
     fun flushDraft() {
+        if (!draftPersistenceEnabled) return
         if (_uiState.value.activeCase == null || _uiState.value.consultationStartedAt == null) return
         draftSaveJob?.cancel()
         draftSaveJob = viewModelScope.launch { persistDraftNow() }
     }
 
     private suspend fun persistDraftNow() {
+        if (!draftPersistenceEnabled) return
         val state = _uiState.value
         val medicalCase = state.activeCase ?: return
         val startedAt = state.consultationStartedAt ?: return

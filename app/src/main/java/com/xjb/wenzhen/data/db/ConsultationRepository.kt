@@ -7,6 +7,9 @@ class ConsultationRepository(private val dao: ConsultationDao) {
 
     suspend fun getById(id: Long): ConsultationEntity? = dao.getById(id)
 
+    suspend fun findCompletedAfter(caseJson: String, since: Long): ConsultationEntity? =
+        dao.findCompletedAfter(caseJson, since)
+
     suspend fun save(entity: ConsultationEntity): Long = dao.insert(entity)
 
     suspend fun delete(id: Long) = dao.deleteById(id)

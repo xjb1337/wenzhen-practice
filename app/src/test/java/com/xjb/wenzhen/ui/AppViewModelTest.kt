@@ -11,6 +11,7 @@ import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
 import com.xjb.wenzhen.data.db.ConsultationDraftEntity
+import com.xjb.wenzhen.data.db.ConsultationEntity
 import com.xjb.wenzhen.data.db.ConversationJsonCodec
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.LlmConfig
@@ -21,6 +22,7 @@ import com.xjb.wenzhen.data.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -29,6 +31,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -221,6 +224,118 @@ class AppViewModelTest {
         assertEquals(false, vm.uiState.value.isPatientTyping)
     }
 
+    @Test
+    fun `结束问诊后即使评分生成失败也必须清除草稿`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(
+                listOf(
+                    ChatMessage(role = MessageRole.DOCTOR, content = DOCTOR_OPENING_LINE),
+                    ChatMessage(role = MessageRole.PATIENT, content = medicalCase.openingLine),
+                ),
+            ),
+            patientPersonality = "COOPERATIVE",
+            encounterType = "OUTPATIENT",
+            startedAt = 1_000L,
+            updatedAt = 2_000L,
+        )
+        runBlocking(Dispatchers.IO) { db.consultationDraftDao().upsert(draft) }
+        val container = AppContainer(context, overrideLlmClient = RecordOnlyClient(), overrideDatabase = db)
+        val vm = AppViewModel(
+            container,
+            AppUiState(
+                settings = apiSettings(),
+                activeCase = medicalCase,
+                consultationStartedAt = 1_000L,
+                messages = listOf(
+                    ChatMessage(role = MessageRole.DOCTOR, content = DOCTOR_OPENING_LINE),
+                    ChatMessage(role = MessageRole.PATIENT, content = medicalCase.openingLine),
+                ),
+                draft = draft,
+            ),
+        )
+        store.put("vm-finish-draft", vm)
+
+        // 病历生成成功、评分生成失败：结果页会展示病历，但本次问诊已经结束。
+        vm.finishConsultation(
+            initialDiagnosis = "急性心肌梗死",
+            diagnosisBasis = "心电图提示 ST 段抬高",
+            generateRecord = true,
+        )
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.draft == null }
+
+        assertNotNull(vm.uiState.value.currentResult)
+        assertNull(vm.uiState.value.draft)
+        assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+
+        // 结果页退到后台时 onStop() 会调用 flushDraft()，不能再把已结束的对话写回草稿。
+        vm.flushDraft()
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.draft == null }
+        assertNull(vm.uiState.value.draft)
+        assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    @Test
+    fun `启动时清理已完成问诊遗留的草稿`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(
+                listOf(
+                    ChatMessage(role = MessageRole.DOCTOR, content = DOCTOR_OPENING_LINE),
+                    ChatMessage(role = MessageRole.PATIENT, content = medicalCase.openingLine),
+                ),
+            ),
+            patientPersonality = "COOPERATIVE",
+            encounterType = "OUTPATIENT",
+            startedAt = 1_000L,
+            updatedAt = 2_000L,
+        )
+        runBlocking(Dispatchers.IO) {
+            db.consultationDraftDao().upsert(draft)
+            db.consultationDao().insert(
+                ConsultationEntity(
+                    caseTitle = medicalCase.title,
+                    department = medicalCase.department,
+                    difficulty = medicalCase.difficulty.label,
+                    patientName = medicalCase.patient.name,
+                    caseJson = CaseJsonCodec.encode(medicalCase),
+                    conversationJson = "[]",
+                    medicalRecord = "",
+                    scoreJson = "",
+                    totalScore = 0,
+                    initialDiagnosis = "",
+                    diagnosisBasis = "",
+                    createdAt = 3_000L,
+                ),
+            )
+        }
+        val container = AppContainer(context, overrideLlmClient = SuccessClient(), overrideDatabase = db)
+        val vm = AppViewModel(
+            container,
+            AppUiState(settings = apiSettings(), draft = draft),
+        )
+        store.put("vm-stale-draft", vm)
+
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.draft == null }
+
+        assertNull(vm.uiState.value.draft)
+        assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    private fun waitUntil(condition: () -> Boolean) {
+        repeat(200) {
+            dispatcher.scheduler.advanceUntilIdle()
+            if (condition()) return
+            Thread.sleep(10)
+        }
+        assertTrue("等待条件超时", condition())
+    }
+
     private class SuccessClient(private val reply: String = "收到。") : LlmClient {
         override suspend fun complete(
             config: LlmConfig,
@@ -271,6 +386,45 @@ class AppViewModelTest {
             onDelta(reply)
             return reply
         }
+    }
+
+    /** 病历生成（jsonMode=false）返回合法病历；评分生成（jsonMode=true）返回非法 JSON。 */
+    private class RecordOnlyClient : LlmClient {
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String = if (jsonMode) {
+            "这不是评分 JSON"
+        } else {
+            """
+            主诉
+            胸痛 3 小时
+            现病史
+            3 小时前突发胸痛
+            既往史
+            高血压
+            体格检查
+            血压 150/90mmHg
+            辅助检查
+            心电图 ST 段抬高
+            初步诊断
+            急性心肌梗死
+            处理意见
+            立即住院
+            """.trimIndent()
+        }
+
+        override suspend fun stream(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            temperature: Double,
+            onDelta: suspend (String) -> Unit,
+        ): String = "收到。"
+
+        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+            ConnectionTestResult.Success
     }
 
     private class BlockingClient : LlmClient {
