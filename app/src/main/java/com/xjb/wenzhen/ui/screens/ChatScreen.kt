@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
+import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,6 +31,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
+import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Science
 import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Timer
@@ -43,16 +45,19 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SmallFloatingActionButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -86,6 +91,7 @@ import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
@@ -114,7 +120,31 @@ fun ChatScreen(
     onDismissNotice: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
     var chatListHeight by remember { mutableIntStateOf(0) }
+    var autoFollow by remember { mutableStateOf(true) }
+    val isAtBottom by remember {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val last = info.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+            last.index == info.totalItemsCount - 1 &&
+                last.offset + last.size <= info.viewportEndOffset + 2
+        }
+    }
+    // 用户手指一碰列表就把「自动贴底」关掉；松手时如果已经回到底部再重新打开。
+    // 这样患者流式回复时不会把正在上翻看历史的用户强行拽回底部（dsh-Go 的 pinned/held 思路）。
+    LaunchedEffect(listState) {
+        listState.interactionSource.interactions.collect { interaction ->
+            when (interaction) {
+                is DragInteraction.Start -> autoFollow = false
+                is DragInteraction.Stop, is DragInteraction.Cancel -> autoFollow = isAtBottom
+            }
+        }
+    }
+    // 拖拽结束后的惯性滑动可能继续把列表带回底部，到底后自动恢复跟随，避免按钮一直浮着。
+    LaunchedEffect(isAtBottom) {
+        if (isAtBottom) autoFollow = true
+    }
     val showTyping = isPatientTyping && messages.lastOrNull()?.let {
         it.role != MessageRole.PATIENT || it.deliveryState != MessageDeliveryState.SENDING
     } != false
@@ -137,10 +167,16 @@ fun ChatScreen(
     // adjustResize 下键盘动画期间 ime inset 可能一直是 0，只能靠布局高度变化来判断。
     LaunchedEffect(messageCount, chatListHeight) {
         if (messageCount > 0 && chatListHeight > 0) {
-            // LazyColumn 的第 0 项是问诊提示、第 1 项是患者卡，消息从第 2 项开始，
-            // 所以最后一项的下标是 messageCount + 1（messageCount 已包含“患者正在输入”项）。
-            listState.scrollToItem(messageCount + 1)
-            listState.scrollBy(100_000f)
+            // 自己刚发出消息（最后一条是医生）时始终贴底；患者新增内容只在原本贴底时跟随，
+            // 用户正在上翻历史时保持当前位置，由右下角「回到最新消息」按钮手动回到底部。
+            val lastRole = messages.lastOrNull()?.role
+            if (autoFollow || lastRole == MessageRole.DOCTOR) {
+                // LazyColumn 的第 0 项是问诊提示、第 1 项是患者卡，消息从第 2 项开始，
+                // 所以最后一项的下标是 messageCount + 1（messageCount 已包含“患者正在输入”项）。
+                listState.scrollToItem(messageCount + 1)
+                listState.scrollBy(100_000f)
+                autoFollow = true
+            }
         }
     }
     LaunchedEffect(startedAtMillis) {
@@ -247,47 +283,66 @@ fun ChatScreen(
                     }
                 }
             }
-            LazyColumn(
-                state = listState,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .onSizeChanged { chatListHeight = it.height },
-                contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 18.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                item {
-                    CoverageHintBar(
-                        report = coverage,
-                        timer = timer,
-                        expanded = coverageExpanded,
-                        onToggle = { coverageExpanded = !coverageExpanded },
-                        modifier = Modifier.padding(bottom = 2.dp),
-                    )
-                }
-                item {
-                    PatientSummaryCard(medicalCase = medicalCase)
-                }
-                if (messages.isEmpty()) {
+            Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .onSizeChanged { chatListHeight = it.height },
+                    contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     item {
-                        EmptyState(
-                            icon = Icons.Outlined.ChatBubbleOutline,
-                            title = "开始你的问诊",
-                            description = "从主诉、起病时间和伴随症状开始，逐步了解患者。",
+                        CoverageHintBar(
+                            report = coverage,
+                            timer = timer,
+                            expanded = coverageExpanded,
+                            onToggle = { coverageExpanded = !coverageExpanded },
+                            modifier = Modifier.padding(bottom = 2.dp),
                         )
                     }
-                }
-                items(messages) { message ->
-                    MessageBubble(
-                        message = message,
-                        onRetry = onRetryMessage,
-                    )
-                }
-                if (showTyping || isQueryingClinical) {
                     item {
-                        TypingBubble(
-                            label = if (isQueryingClinical) "正在整理检查结果…" else "患者正在输入…",
+                        PatientSummaryCard(medicalCase = medicalCase)
+                    }
+                    if (messages.isEmpty()) {
+                        item {
+                            EmptyState(
+                                icon = Icons.Outlined.ChatBubbleOutline,
+                                title = "开始你的问诊",
+                                description = "从主诉、起病时间和伴随症状开始，逐步了解患者。",
+                            )
+                        }
+                    }
+                    items(messages) { message ->
+                        MessageBubble(
+                            message = message,
+                            onRetry = onRetryMessage,
                         )
+                    }
+                    if (showTyping || isQueryingClinical) {
+                        item {
+                            TypingBubble(
+                                label = if (isQueryingClinical) "正在整理检查结果…" else "患者正在输入…",
+                            )
+                        }
+                    }
+                }
+                if (!autoFollow && messageCount > 0) {
+                    SmallFloatingActionButton(
+                        onClick = {
+                            scope.launch {
+                                listState.animateScrollToItem(messageCount + 1)
+                                listState.scrollBy(100_000f)
+                                autoFollow = true
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 18.dp, bottom = 8.dp),
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.primary,
+                    ) {
+                        Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = "回到最新消息")
                     }
                 }
             }

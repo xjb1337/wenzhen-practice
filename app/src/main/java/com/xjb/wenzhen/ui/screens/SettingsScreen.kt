@@ -10,6 +10,7 @@ import android.widget.Toast
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -86,6 +88,7 @@ import com.xjb.wenzhen.ui.theme.GradientStart
 import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
+import com.xjb.wenzhen.ui.theme.WenzhenColors
 import com.xjb.wenzhen.ui.theme.paletteFor
 
 @Composable
@@ -363,22 +366,15 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
-                    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(vertical = 2.dp),
+                    ) {
                         items(AppTheme.entries) { option ->
-                            val swatch = paletteFor(option, false).primary
-                            androidx.compose.material3.FilterChip(
+                            ThemePreviewCard(
+                                theme = option,
                                 selected = theme == option,
                                 onClick = { onThemeChange(option) },
-                                label = { Text(option.label) },
-                                leadingIcon = {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(swatch),
-                                    )
-                                },
-                                shape = CircleShape,
                             )
                         }
                     }
@@ -684,6 +680,92 @@ private fun ConnectionTestStatus(state: ConnectionTestUiState) {
                 text = message,
                 style = MaterialTheme.typography.bodySmall,
                 color = foreground,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ThemePreviewCard(
+    theme: AppTheme,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
+    val light = paletteFor(theme, false)
+    val dark = paletteFor(theme, true)
+    Column(
+        modifier = Modifier
+            .width(136.dp)
+            .clip(RoundedCornerShape(18.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(
+                width = if (selected) 2.dp else 1.dp,
+                color = if (selected) light.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = RoundedCornerShape(18.dp),
+            )
+            .clickable(onClick = onClick)
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            MiniThemePreview(palette = light, modifier = Modifier.weight(1f))
+            MiniThemePreview(palette = dark, modifier = Modifier.weight(1f))
+        }
+        Text(
+            text = theme.label,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        Text(
+            text = if (selected) "正在使用" else "浅色 / 深色",
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) light.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@Composable
+private fun MiniThemePreview(
+    palette: WenzhenColors,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier
+            .height(58.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(palette.canvas),
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(16.dp)
+                .background(Brush.horizontalGradient(listOf(palette.gradientStart, palette.gradientEnd))),
+        )
+        Column(
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(0.78f)
+                    .height(4.dp)
+                    .clip(CircleShape)
+                    .background(palette.ink.copy(alpha = 0.8f)),
+            )
+            Box(
+                Modifier
+                    .fillMaxWidth(0.55f)
+                    .height(3.dp)
+                    .clip(CircleShape)
+                    .background(palette.inkMuted.copy(alpha = 0.7f)),
+            )
+            Box(
+                Modifier
+                    .width(22.dp)
+                    .height(7.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(palette.primary),
             )
         }
     }
