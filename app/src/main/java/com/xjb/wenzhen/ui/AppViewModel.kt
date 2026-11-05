@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
+import com.xjb.wenzhen.data.api.RedeemResult
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.db.ConsultationEntity
@@ -22,6 +23,7 @@ import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.ScoreParser
@@ -40,6 +42,7 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import java.util.UUID
 
 /** 新问诊固定由医生先开口，随后患者再描述主诉；旧草稿恢复时也会补上这句。 */
 internal const val DOCTOR_OPENING_LINE = "您好，我是接诊医生。请问您哪里不舒服？"
@@ -200,7 +203,7 @@ class AppViewModel(
         val medicalCase = state.activeCase ?: return
 
         if (!state.canPractice) {
-            _uiState.update { it.copy(chatError = "请先在设置中填写 DeepSeek API Key。") }
+            _uiState.update { it.copy(chatError = state.settings.aiSetupMessage) }
             viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
             return
         }
@@ -238,7 +241,7 @@ class AppViewModel(
         }
         if (failedIndex < 0) return
         if (!state.canPractice) {
-            _uiState.update { it.copy(chatError = "请先在设置中填写 DeepSeek API Key。") }
+            _uiState.update { it.copy(chatError = state.settings.aiSetupMessage) }
             viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
             return
         }
@@ -490,7 +493,7 @@ class AppViewModel(
         val medicalCase = state.activeCase ?: return
         if (!state.canPractice) {
             _uiState.update {
-                it.copy(chatError = "请先在设置中填写 DeepSeek API Key，再索取检查结果。")
+                it.copy(chatError = "${state.settings.aiSetupMessage}再索取检查结果。")
             }
             viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
             return
@@ -549,7 +552,7 @@ class AppViewModel(
         if (state.isGeneratingCase) return
         if (!state.hasApiKey) {
             _uiState.update {
-                it.copy(generationError = "请先在设置中保存 DeepSeek API Key，再生成病例。")
+                it.copy(generationError = "${state.settings.aiSetupMessage}再生成病例。")
             }
             viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
             return
@@ -611,7 +614,9 @@ class AppViewModel(
             return
         }
         if (!state.canPractice) {
-            _uiState.update { it.copy(finishError = "请先在设置中填写 DeepSeek API Key，或在设置中开启离线基础训练。") }
+            _uiState.update {
+                it.copy(finishError = "${state.settings.aiSetupMessage}或在设置中开启离线基础训练。")
+            }
             viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
             return
         }
@@ -786,18 +791,32 @@ class AppViewModel(
         baseUrl: String,
         thinkingLevel: ThinkingLevel = _uiState.value.settings.thinkingLevel,
         generateRecord: Boolean = _uiState.value.settings.generateRecord,
+        apiSource: ApiSource = _uiState.value.settings.apiSource,
     ) {
-        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
-        if (normalizedUrl == null) {
-            _uiState.update { it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。") }
+        val currentSettings = _uiState.value.settings
+        val normalizedUrl = if (apiSource == ApiSource.OWN_KEY) {
+            BaseUrlPolicy.normalizeHttps(baseUrl)
+        } else {
+            currentSettings.baseUrl.ifBlank { AppSettings.DEFAULT_BASE_URL }
+        }
+        if (apiSource == ApiSource.OWN_KEY && normalizedUrl == null) {
+            _uiState.update {
+                it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。")
+            }
             return
         }
-        val newSettings = _uiState.value.settings.copy(
+        val newSettings = currentSettings.copy(
             apiKey = apiKey.trim(),
-            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
-            baseUrl = normalizedUrl,
+            model = if (apiSource == ApiSource.BUILTIN) {
+                AppSettings.MODEL_FLASH
+            } else {
+                model.trim().ifBlank { AppSettings.MODEL_FLASH }
+            },
+            baseUrl = normalizedUrl ?: currentSettings.baseUrl,
             thinkingLevel = thinkingLevel,
             generateRecord = generateRecord,
+            apiSource = apiSource,
+            deviceId = currentSettings.deviceId.trim().ifBlank { UUID.randomUUID().toString() },
         )
         try {
             container.settingsRepository.save(newSettings)
@@ -822,43 +841,162 @@ class AppViewModel(
         _uiState.update { it.copy(settingsSaveError = null) }
     }
 
+    fun redeemInvite(code: String) {
+        val inviteCode = code.trim()
+        if (inviteCode.isEmpty()) {
+            _uiState.update { it.copy(redeemError = "请输入邀请码。") }
+            return
+        }
+        val state = _uiState.value
+        if (state.isRedeemingInvite) return
+        val currentSettings = state.settings
+        val deviceId = currentSettings.deviceId.trim().ifBlank { UUID.randomUUID().toString() }
+        _uiState.update { it.copy(isRedeemingInvite = true, redeemError = null) }
+        viewModelScope.launch {
+            when (val result = container.relayClient.redeem(
+                baseUrl = currentSettings.relayBaseUrl,
+                code = inviteCode,
+                deviceId = deviceId,
+            )) {
+                is RedeemResult.Success -> {
+                    val updated = currentSettings.copy(
+                        apiSource = ApiSource.BUILTIN,
+                        deviceId = deviceId,
+                        sessionToken = result.sessionToken,
+                        relayBaseUrl = currentSettings.relayBaseUrl.trim()
+                            .ifBlank { AppSettings.RELAY_BASE_URL },
+                    )
+                    try {
+                        container.settingsRepository.save(updated)
+                        _uiState.update {
+                            it.copy(
+                                settings = updated,
+                                isRedeemingInvite = false,
+                                redeemError = null,
+                                settingsSaveError = null,
+                                connectionTest = ConnectionTestUiState(),
+                            )
+                        }
+                        _events.send(AppEvent.ShowMessage("邀请码兑换成功，已启用内置服务。"))
+                    } catch (error: Exception) {
+                        _uiState.update {
+                            it.copy(
+                                isRedeemingInvite = false,
+                                redeemError = friendlyMessage(error, "兑换成功，但本机保存失败，请重试。"),
+                            )
+                        }
+                    }
+                }
+                is RedeemResult.Failure -> {
+                    _uiState.update {
+                        it.copy(
+                            isRedeemingInvite = false,
+                            redeemError = result.message,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearInviteRedemption() {
+        val currentSettings = _uiState.value.settings
+        val updated = currentSettings.copy(sessionToken = "")
+        try {
+            container.settingsRepository.save(updated)
+            _uiState.update {
+                it.copy(
+                    settings = updated,
+                    redeemError = null,
+                    connectionTest = ConnectionTestUiState(),
+                )
+            }
+            viewModelScope.launch { _events.send(AppEvent.ShowMessage("已清除内置服务兑换信息。")) }
+        } catch (error: Exception) {
+            _uiState.update {
+                it.copy(redeemError = friendlyMessage(error, "清除兑换信息失败，请重试。"))
+            }
+        }
+    }
+
+    fun clearRedeemError() {
+        _uiState.update { it.copy(redeemError = null) }
+    }
+
     fun testConnection(
+        apiSource: ApiSource,
         apiKey: String,
         model: String,
         baseUrl: String,
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ) {
         if (_uiState.value.connectionTest.isTesting) return
-        val key = apiKey.trim()
-        if (key.isEmpty()) {
-            _uiState.update {
-                it.copy(
-                    connectionTest = ConnectionTestUiState(
-                        message = "请先填写 DeepSeek API Key。",
-                        isSuccess = false,
+        val currentSettings = _uiState.value.settings
+        val config = if (apiSource == ApiSource.BUILTIN) {
+            if (currentSettings.sessionToken.isBlank()) {
+                _uiState.update {
+                    it.copy(
+                        connectionTest = ConnectionTestUiState(
+                            message = "请先兑换邀请码。",
+                            isSuccess = false,
+                        )
                     )
-                )
+                }
+                return
             }
-            return
-        }
-        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
-        if (normalizedUrl == null) {
-            _uiState.update {
-                it.copy(
-                    connectionTest = ConnectionTestUiState(
-                        message = "Base URL 必须使用 HTTPS（以 https:// 开头）。",
-                        isSuccess = false,
+            val relayUrl = BaseUrlPolicy.normalizeHttps(
+                currentSettings.relayBaseUrl.ifBlank { AppSettings.RELAY_BASE_URL },
+            )
+            if (relayUrl == null) {
+                _uiState.update {
+                    it.copy(
+                        connectionTest = ConnectionTestUiState(
+                            message = "内置服务地址必须使用 HTTPS。",
+                            isSuccess = false,
+                        )
                     )
-                )
+                }
+                return
             }
-            return
+            AppSettings(
+                apiSource = ApiSource.BUILTIN,
+                sessionToken = currentSettings.sessionToken,
+                deviceId = currentSettings.deviceId,
+                relayBaseUrl = relayUrl,
+                thinkingLevel = thinkingLevel,
+            ).toLlmConfig()
+        } else {
+            val key = apiKey.trim()
+            if (key.isEmpty()) {
+                _uiState.update {
+                    it.copy(
+                        connectionTest = ConnectionTestUiState(
+                            message = "请先填写 DeepSeek API Key。",
+                            isSuccess = false,
+                        )
+                    )
+                }
+                return
+            }
+            val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
+            if (normalizedUrl == null) {
+                _uiState.update {
+                    it.copy(
+                        connectionTest = ConnectionTestUiState(
+                            message = "Base URL 必须使用 HTTPS（以 https:// 开头）。",
+                            isSuccess = false,
+                        )
+                    )
+                }
+                return
+            }
+            AppSettings(
+                apiKey = key,
+                model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
+                baseUrl = normalizedUrl,
+                thinkingLevel = thinkingLevel,
+            ).toLlmConfig()
         }
-        val config = AppSettings(
-            apiKey = key,
-            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
-            baseUrl = normalizedUrl,
-            thinkingLevel = thinkingLevel,
-        ).toLlmConfig()
         _uiState.update { it.copy(connectionTest = ConnectionTestUiState(isTesting = true)) }
         viewModelScope.launch {
             try {
@@ -867,7 +1005,11 @@ class AppViewModel(
                     it.copy(
                         connectionTest = when (result) {
                             ConnectionTestResult.Success -> ConnectionTestUiState(
-                                message = "连接成功，API Key 可用。",
+                                message = if (apiSource == ApiSource.BUILTIN) {
+                                    "连接成功，内置服务可用。"
+                                } else {
+                                    "连接成功，API Key 可用。"
+                                },
                                 isSuccess = true,
                             )
                             is ConnectionTestResult.Failure -> ConnectionTestUiState(

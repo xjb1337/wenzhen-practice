@@ -363,7 +363,7 @@ private fun AiCaseCard(
                     text = if (hasApiKey) {
                         "选择科室和难度，让标准化病人换个考题"
                     } else {
-                        "尚未配置 API Key，先完成设置即可使用"
+                        "尚未配置 AI 服务，先完成设置即可使用"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -652,7 +652,7 @@ private fun GenerateCaseDialog(
                 }
                 if (!hasApiKey) {
                     NoticeBanner(
-                        message = "还没有配置 DeepSeek API Key，无法生成病例。",
+                        message = "还没有配置 AI 服务，无法生成病例。",
                         isError = false,
                     )
                 }

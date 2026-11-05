@@ -10,6 +10,8 @@ data class LlmConfig(
     val model: String,
     val baseUrl: String,
     val thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
+    val deviceId: String = "",
+    val useRelay: Boolean = false,
 )
 
 enum class ThinkingLevel(val label: String, val apiValue: String?) {

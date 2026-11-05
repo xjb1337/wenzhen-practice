@@ -65,6 +65,8 @@ data class AppUiState(
     val historyDetailLoading: Boolean = false,
     val historyDetailError: String? = null,
     val settingsSaveError: String? = null,
+    val isRedeemingInvite: Boolean = false,
+    val redeemError: String? = null,
     val connectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val updateState: UpdateUiState = UpdateUiState.Idle,
 ) {
@@ -77,6 +79,9 @@ data class AppUiState(
 
     val hasApiKey: Boolean
         get() = settings.hasApiKey
+
+    val aiSetupMessage: String
+        get() = settings.aiSetupMessage
 
     val canPractice: Boolean
         get() = hasApiKey || settings.offlineMode

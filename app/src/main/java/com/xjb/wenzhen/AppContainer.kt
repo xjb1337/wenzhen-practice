@@ -4,6 +4,7 @@ import android.content.Context
 import com.xjb.wenzhen.BuildConfig
 import com.xjb.wenzhen.data.api.DeepSeekClient
 import com.xjb.wenzhen.data.api.LlmClient
+import com.xjb.wenzhen.data.api.RelayClient
 import com.xjb.wenzhen.data.db.AppDatabase
 import com.xjb.wenzhen.data.db.ConsultationRepository
 import com.xjb.wenzhen.data.db.ConsultationDraftRepository
@@ -29,6 +30,7 @@ class AppContainer(
     val savedCaseRepository = SavedCaseRepository(database.savedCaseDao())
     val settingsRepository = SettingsRepository(context)
     val llmClient: LlmClient = overrideLlmClient ?: DeepSeekClient()
+    val relayClient = RelayClient()
     val updateChecker = UpdateChecker(appContext)
     val currentVersionName: String
     val currentVersionCode: Int
