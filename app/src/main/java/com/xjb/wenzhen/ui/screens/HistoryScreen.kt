@@ -88,6 +88,7 @@ fun HistoryScreen(
 ) {
     val context = LocalContext.current
     var showClearConfirm by remember { mutableStateOf(false) }
+    var pendingDeleteId by remember { mutableStateOf<Long?>(null) }
     var showExportMenu by remember { mutableStateOf(false) }
     var selectedDepartment by rememberSaveable { mutableStateOf("全部") }
     var scoreBand by rememberSaveable { mutableStateOf("全部") }
@@ -120,6 +121,22 @@ fun HistoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { showClearConfirm = false }) { Text("取消") }
+            },
+        )
+    }
+    records.firstOrNull { it.id == pendingDeleteId }?.let { pendingDelete ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteId = null },
+            title = { Text("删除这条问诊记录？") },
+            text = { Text("删除后不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteRecord(pendingDelete.id)
+                    pendingDeleteId = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteId = null }) { Text("取消") }
             },
         )
     }
@@ -319,7 +336,11 @@ fun HistoryScreen(
                     }
                 }
                 items(visibleRecords, key = { it.id }) { record ->
-                    HistoryCard(record = record, onClick = { onRecordClick(record.id) }, onDelete = { onDeleteRecord(record.id) })
+                    HistoryCard(
+                        record = record,
+                        onClick = { onRecordClick(record.id) },
+                        onDelete = { pendingDeleteId = record.id },
+                    )
                 }
             }
         }
@@ -440,17 +461,19 @@ private fun HistoryCard(
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text(
-                    text = "${record.totalScore}",
+                    text = "${record.totalScore}分",
                     color = MaterialTheme.colorScheme.primary,
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
                 )
-                TextButton(onClick = onDelete) { Text("删除", color = MaterialTheme.colorScheme.error) }
-                Text(
-                    text = "分",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.labelMedium,
-                )
+                IconButton(onClick = onDelete) {
+                    Icon(
+                        imageVector = Icons.Outlined.Delete,
+                        contentDescription = "删除",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(20.dp),
+                    )
+                }
             }
             Icon(
                 imageVector = Icons.Outlined.ChevronRight,

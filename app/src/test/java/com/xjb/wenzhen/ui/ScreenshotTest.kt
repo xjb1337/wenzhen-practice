@@ -1,14 +1,17 @@
 package com.xjb.wenzhen.ui
 
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onRoot
+import androidx.compose.ui.test.performClick
 import com.github.takahirom.roborazzi.captureRoboImage
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipeUp
 import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.db.ConsultationEntity
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
 import com.xjb.wenzhen.data.model.MessageRole
@@ -27,6 +30,8 @@ import com.xjb.wenzhen.ui.screens.SettingsScreen
 import com.xjb.wenzhen.ui.screens.StatsScreen
 import com.xjb.wenzhen.ui.screens.UpdateDialog
 import com.xjb.wenzhen.ui.theme.WenzhenTheme
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -88,6 +93,35 @@ class ScreenshotTest {
             )
         }
         capture("history_empty.png")
+    }
+
+    @Test
+    fun historyRecordScreenshot() {
+        val record = historyRecord()
+        var openedRecordId: Long? = null
+        var deletedRecordId: Long? = null
+        setScreen {
+            HistoryScreen(
+                records = listOf(record),
+                isLoading = false,
+                errorMessage = null,
+                onRecordClick = { openedRecordId = it },
+                onDeleteRecord = { deletedRecordId = it },
+            )
+        }
+
+        composeRule.onNodeWithText("79分").assertExists()
+        capture("history_record.png")
+
+        composeRule.onNodeWithContentDescription("删除").performClick()
+        composeRule.onNodeWithText("删除这条问诊记录？").assertExists()
+        assertNull(openedRecordId)
+        assertNull(deletedRecordId)
+        captureDialog("history_delete_confirm.png")
+
+        composeRule.onNodeWithText("删除").performClick()
+        assertEquals(record.id, deletedRecordId)
+        assertNull(openedRecordId)
     }
 
     @Test
@@ -413,6 +447,22 @@ class ScreenshotTest {
             filePath = "build/outputs/roborazzi/$fileName",
         )
     }
+
+    private fun historyRecord() = ConsultationEntity(
+        id = 7L,
+        caseTitle = "突发胸痛伴大汗",
+        department = "心内科",
+        difficulty = "中等",
+        patientName = "王建国",
+        caseJson = "{}",
+        conversationJson = "[]",
+        medicalRecord = "",
+        scoreJson = "{}",
+        totalScore = 79,
+        initialDiagnosis = "急性心肌梗死",
+        diagnosisBasis = "持续胸痛伴大汗",
+        createdAt = 1_700_000_000_000,
+    )
 
     private fun sampleRecord(): String = """
         一般情况
