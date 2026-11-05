@@ -219,7 +219,7 @@ class ScreenshotTest {
                     model = AppSettings.MODEL_PRO,
                     baseUrl = AppSettings.DEFAULT_BASE_URL,
                 ),
-                onSave = { _, _, _, _, _ -> },
+                onSave = { _, _, _, _, _, _ -> },
                 onBack = {},
             )
         }
@@ -231,7 +231,7 @@ class ScreenshotTest {
         setScreen {
             SettingsScreen(
                 settings = AppSettings(),
-                onSave = { _, _, _, _, _ -> },
+                onSave = { _, _, _, _, _, _ -> },
                 onBack = {},
                 initialGuideExpanded = true,
             )
@@ -248,7 +248,7 @@ class ScreenshotTest {
                     model = AppSettings.MODEL_FLASH,
                     baseUrl = AppSettings.DEFAULT_BASE_URL,
                 ),
-                onSave = { _, _, _, _, _ -> },
+                onSave = { _, _, _, _, _, _ -> },
                 onBack = {},
                 connectionTest = ConnectionTestUiState(
                     message = "连接成功，API Key 可用。",
@@ -364,7 +364,7 @@ class ScreenshotTest {
     @Test
     fun settingsThinkingScreenshot() {
         setScreen {
-            SettingsScreen(settings = AppSettings(apiKey = "sk-demo", thinkingLevel = com.xjb.wenzhen.data.model.ThinkingLevel.HIGH), onSave = { _, _, _, _, _ -> }, onBack = {})
+            SettingsScreen(settings = AppSettings(apiKey = "sk-demo", thinkingLevel = com.xjb.wenzhen.data.model.ThinkingLevel.HIGH), onSave = { _, _, _, _, _, _ -> }, onBack = {})
         }
         composeRule.onRoot().performTouchInput { swipeUp() }
         composeRule.onRoot().performTouchInput { swipeUp() }

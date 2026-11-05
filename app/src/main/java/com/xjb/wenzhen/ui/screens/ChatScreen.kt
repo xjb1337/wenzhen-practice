@@ -253,7 +253,7 @@ fun ChatScreen(
         ) {
             if (!hasApiKey) {
                 NoticeBanner(
-                    message = "尚未配置 API Key，无法获得患者回复。",
+                    message = "尚未完成 AI 服务配置，无法获得患者回复。",
                     actionLabel = "去设置",
                     onAction = onOpenSettings,
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),

@@ -36,6 +36,14 @@ class DeepSeekClientHttpTest {
         baseUrl = server.url("/v1").toString().trimEnd('/'),
     )
 
+    private fun relayConfig() = LlmConfig(
+        apiKey = "session-token",
+        model = "deepseek-flash",
+        baseUrl = server.url("/").toString().trimEnd('/'),
+        deviceId = "device-1",
+        useRelay = true,
+    )
+
     private fun successBody(content: String = "ok") =
         """{"choices":[{"message":{"content":"$content"}}]}"""
 
@@ -83,5 +91,61 @@ class DeepSeekClientHttpTest {
 
         assertEquals("你好", result)
         assertEquals(listOf("你", "好"), deltas)
+    }
+
+    @Test
+    fun `内置服务请求使用 v1 路径和会话头`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+
+        val result = client.complete(relayConfig(), messages)
+
+        assertEquals("ok", result)
+        val request = server.takeRequest()
+        assertEquals("/v1/chat/completions", request.path)
+        assertEquals("Bearer session-token", request.getHeader("Authorization"))
+        assertEquals("device-1", request.getHeader("X-Device-Id"))
+    }
+
+    @Test
+    fun `内置服务额度错误不重试并返回中文提示`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(403)
+                .setBody("""{"error":{"code":"quota_device"}}"""),
+        )
+
+        try {
+            client.complete(relayConfig(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals("今日额度已用完", error.message)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `内置服务优先使用健康检查`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200))
+
+        val result = client.testConnection(relayConfig())
+
+        assertEquals(ConnectionTestResult.Success, result)
+        val request = server.takeRequest()
+        assertEquals("/v1/health", request.path)
+        assertEquals("Bearer session-token", request.getHeader("Authorization"))
+        assertEquals("device-1", request.getHeader("X-Device-Id"))
+    }
+
+    @Test
+    fun `健康检查缺失时回退到最小补全请求`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(404))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+
+        val result = client.testConnection(relayConfig())
+
+        assertEquals(ConnectionTestResult.Success, result)
+        assertEquals(2, server.requestCount)
+        assertEquals("/v1/health", server.takeRequest().path)
+        assertEquals("/v1/chat/completions", server.takeRequest().path)
     }
 }
