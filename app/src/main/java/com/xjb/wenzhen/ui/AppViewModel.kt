@@ -41,6 +41,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 
+/** 新问诊固定由医生先开口，随后患者再描述主诉；旧草稿恢复时也会补上这句。 */
+internal const val DOCTOR_OPENING_LINE = "您好，我是接诊医生。请问您哪里不舒服？"
+
 class AppViewModel(
     private val container: AppContainer,
     initialUiState: AppUiState? = null,
@@ -81,17 +84,24 @@ class AppViewModel(
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
         encounterType: EncounterType = EncounterType.OUTPATIENT,
     ) {
+        val startedAt = System.currentTimeMillis()
+        val doctorOpeningMessage = ChatMessage(
+            role = MessageRole.DOCTOR,
+            content = DOCTOR_OPENING_LINE,
+            timestamp = startedAt,
+        )
         val openingMessage = ChatMessage(
             role = MessageRole.PATIENT,
             content = medicalCase.openingLine,
+            timestamp = startedAt + 1,
         )
         _uiState.update {
             it.copy(
                 activeCase = medicalCase,
                 patientPersonality = personality,
                 encounterType = encounterType,
-                consultationStartedAt = System.currentTimeMillis(),
-                messages = listOf(openingMessage),
+                consultationStartedAt = startedAt,
+                messages = listOf(doctorOpeningMessage, openingMessage),
                 isPatientTyping = false,
                 isQueryingClinical = false,
                 chatError = null,
@@ -119,7 +129,10 @@ class AppViewModel(
     fun resumeDraft() {
         val draft = _uiState.value.draft ?: return
         val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return
-        val messages = reconcileRecoveredConversation(ConversationJsonCodec.decode(draft.conversationJson))
+        val messages = ensureDoctorOpening(
+            reconcileRecoveredConversation(ConversationJsonCodec.decode(draft.conversationJson)),
+            draft.startedAt,
+        )
         _uiState.update {
             it.copy(
                 activeCase = medicalCase,
@@ -151,6 +164,17 @@ class AppViewModel(
                 else -> message
             }
         }
+
+    /** v1.3.1 及更早的草稿以患者开场；恢复时补医生开场白，保证问诊始终由医生先发问。 */
+    private fun ensureDoctorOpening(messages: List<ChatMessage>, startedAt: Long): List<ChatMessage> {
+        if (messages.firstOrNull()?.role == MessageRole.DOCTOR) return messages
+        val doctorOpening = ChatMessage(
+            role = MessageRole.DOCTOR,
+            content = DOCTOR_OPENING_LINE,
+            timestamp = startedAt,
+        )
+        return listOf(doctorOpening) + messages
+    }
 
     fun discardDraft() {
         viewModelScope.launch { container.consultationDraftRepository.clear() }

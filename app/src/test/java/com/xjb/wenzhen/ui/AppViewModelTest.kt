@@ -21,13 +21,11 @@ import com.xjb.wenzhen.data.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withContext
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -58,12 +56,13 @@ class AppViewModelTest {
 
     @After
     fun tearDown() {
-        // P0-6：先取消所有 ViewModel 协程并把测试调度器跑空，再切到 IO 线程关闭数据库。
-        // 直接在 Robolectric 主线程 close() 会和 Room 的 InvalidationTracker 刷新协程互相持锁，
-        // 出现 "Found one Java-level deadlock"（arch_disk_io 等 ReadLock、主线程等 ProcessLock）。
+        // P0-6：内存数据库不在这里 close()。Room 2.6.1 的 InvalidationTracker 在 ViewModel 的
+        // Flow 查询尚未完全取消时执行 close()，会与 arch_disk_io 查询线程发生锁反转死锁
+        // （jstack: Found one Java-level deadlock；arch_disk_io 等 ReadLock，
+        // DefaultDispatcher-worker 在 ProcessLock.lock 等 close）。测试进程结束会释放全部
+        // 内存数据库连接，因此只清理 ViewModelStore 和测试调度器即可。
         store.clear()
         dispatcher.scheduler.advanceUntilIdle()
-        runBlocking { withContext(Dispatchers.IO) { db.close() } }
         Dispatchers.resetMain()
     }
 
@@ -75,7 +74,11 @@ class AppViewModelTest {
             activeCase = medicalCase,
             consultationStartedAt = 1_000L,
             messages = listOf(
-                com.xjb.wenzhen.data.model.ChatMessage(
+                ChatMessage(
+                    role = MessageRole.DOCTOR,
+                    content = DOCTOR_OPENING_LINE,
+                ),
+                ChatMessage(
                     role = MessageRole.PATIENT,
                     content = medicalCase.openingLine,
                 ),
@@ -87,7 +90,7 @@ class AppViewModelTest {
     }
 
     private fun apiSettings() = AppSettings(
-        apiKey = "test-key",
+        apiKey = "sk-test-key",
         model = "deepseek-chat",
         baseUrl = "https://api.deepseek.com",
         offlineMode = false,
@@ -102,6 +105,24 @@ class AppViewModelTest {
         val error = vm.uiState.value.settingsSaveError
         assertNotNull(error)
         assertTrue(error.orEmpty().contains("HTTPS"))
+    }
+
+    @Test
+    fun `新问诊由医生先开口并随后展示患者主诉`() = runTest(dispatcher) {
+        val vm = viewModel(SuccessClient())
+        val medicalCase = BuiltInCases.all.first()
+
+        vm.openCase(medicalCase)
+        advanceUntilIdle()
+
+        val messages = vm.uiState.value.messages
+        assertEquals(2, messages.size)
+        assertEquals(MessageRole.DOCTOR, messages[0].role)
+        assertEquals(DOCTOR_OPENING_LINE, messages[0].content)
+        assertEquals(MessageDeliveryState.SENT, messages[0].deliveryState)
+        assertEquals(MessageRole.PATIENT, messages[1].role)
+        assertEquals(medicalCase.openingLine, messages[1].content)
+        assertTrue(messages[0].timestamp <= messages[1].timestamp)
     }
 
     @Test
@@ -189,10 +210,13 @@ class AppViewModelTest {
         vm.resumeDraft()
 
         val messages = vm.uiState.value.messages
-        assertEquals(2, messages.size)
-        assertEquals(MessageDeliveryState.SENT, messages[0].deliveryState)
-        assertEquals(MessageRole.DOCTOR, messages[1].role)
-        assertEquals(MessageDeliveryState.FAILED, messages[1].deliveryState)
+        assertEquals(3, messages.size)
+        assertEquals(MessageRole.DOCTOR, messages[0].role)
+        assertEquals(DOCTOR_OPENING_LINE, messages[0].content)
+        assertEquals(MessageRole.PATIENT, messages[1].role)
+        assertEquals(MessageDeliveryState.SENT, messages[1].deliveryState)
+        assertEquals(MessageRole.DOCTOR, messages[2].role)
+        assertEquals(MessageDeliveryState.FAILED, messages[2].deliveryState)
         assertTrue(messages.none { it.role == MessageRole.PATIENT && it.deliveryState == MessageDeliveryState.SENDING })
         assertEquals(false, vm.uiState.value.isPatientTyping)
     }
