@@ -60,6 +60,7 @@ import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
+import com.xjb.wenzhen.domain.CaseGenerationSelection
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.DifficultyBadge
 import com.xjb.wenzhen.ui.components.EmptyState
@@ -87,7 +88,7 @@ fun CaseLibraryScreen(
     favoriteCaseIds: Set<String> = emptySet(),
     onToggleFavorite: (String) -> Unit = {},
     onDeleteSavedCase: (String) -> Unit = {},
-    onGenerateCase: (String, Difficulty, PatientPersonality, EncounterType) -> Unit = { _, _, _, _ -> },
+    onGenerateCase: (CaseGenerationSelection) -> Unit = {},
     onOpenSettings: () -> Unit = {},
     onClearGenerationError: () -> Unit = {},
     isGenerating: Boolean = false,
@@ -240,9 +241,9 @@ fun CaseLibraryScreen(
             },
             isGenerating = isGenerating,
             onDismiss = { showGenerateDialog = false },
-            onGenerate = { department, difficulty, personality, encounterType ->
+            onGenerate = { selection ->
                 showGenerateDialog = false
-                onGenerateCase(department, difficulty, personality, encounterType)
+                onGenerateCase(selection)
             },
             onOpenSettings = {
                 showGenerateDialog = false
@@ -545,7 +546,7 @@ private fun GenerateCaseDialog(
     initialDepartment: String,
     isGenerating: Boolean,
     onDismiss: () -> Unit,
-    onGenerate: (String, Difficulty, PatientPersonality, EncounterType) -> Unit,
+    onGenerate: (CaseGenerationSelection) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
     val groups = CaseGenerationDepartments.groups
@@ -556,9 +557,14 @@ private fun GenerateCaseDialog(
                 ?: groups.first().label
         )
     }
-    var difficulty by rememberSaveable { mutableStateOf(Difficulty.MEDIUM) }
-    var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
-    var encounterType by rememberSaveable { mutableStateOf(EncounterType.OUTPATIENT) }
+    var difficulty by rememberSaveable { mutableStateOf<Difficulty?>(Difficulty.MEDIUM) }
+    var personality by rememberSaveable {
+        mutableStateOf<PatientPersonality?>(PatientPersonality.COOPERATIVE)
+    }
+    var encounterType by rememberSaveable {
+        mutableStateOf<EncounterType?>(EncounterType.OUTPATIENT)
+    }
+    val currentGroup = groups.first { it.label == groupLabel }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -586,8 +592,13 @@ private fun GenerateCaseDialog(
                                 selected = groupLabel == group.label,
                                 onClick = {
                                     groupLabel = group.label
-                                    // 切分组时同步把科室设为本组首项，保证「选中态 / 症候参考 / 生成参数」三者一致。
-                                    department = group.departments.first()
+                                    // 全库随机与本组随机在切组后保持语义；具体科室不在新组时回退到本组首项。
+                                    if (department != CaseGenerationSelection.RANDOM_DEPARTMENT &&
+                                        department != CaseGenerationSelection.RANDOM &&
+                                        department !in group.departments
+                                    ) {
+                                        department = group.departments.first()
+                                    }
                                 },
                                 label = { Text("${group.label} (${group.departments.size})") },
                                 shape = CircleShape,
@@ -597,12 +608,33 @@ private fun GenerateCaseDialog(
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("科室", style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "科室",
+                            style = MaterialTheme.typography.titleSmall,
+                            modifier = Modifier.weight(1f),
+                        )
+                        FilterChip(
+                            selected = department == CaseGenerationSelection.RANDOM_DEPARTMENT,
+                            onClick = { department = CaseGenerationSelection.RANDOM_DEPARTMENT },
+                            label = { Text("随机科室") },
+                            shape = CircleShape,
+                        )
+                    }
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(7.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        groups.first { it.label == groupLabel }.departments.forEach { item ->
+                        FilterChip(
+                            selected = department == CaseGenerationSelection.RANDOM,
+                            onClick = { department = CaseGenerationSelection.RANDOM },
+                            label = { Text("随机") },
+                            shape = CircleShape,
+                        )
+                        currentGroup.departments.forEach { item ->
                             FilterChip(
                                 selected = department == item,
                                 onClick = { department = item },
@@ -613,8 +645,12 @@ private fun GenerateCaseDialog(
                     }
                     // 症候提示摘要：只取第一段，避免把红旗里的诊断名直接展示给正在练问诊的用户。
                     Text(
-                        text = "症候参考：" +
-                            CaseGenerationDepartments.hintFor(department).substringBefore("；"),
+                        text = when (department) {
+                            CaseGenerationSelection.RANDOM_DEPARTMENT -> "症候参考：将从全部科室中随机"
+                            CaseGenerationSelection.RANDOM -> "症候参考：将从${currentGroup.label}中随机"
+                            else -> "症候参考：" +
+                                CaseGenerationDepartments.hintFor(department).substringBefore("；")
+                        },
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -631,11 +667,18 @@ private fun GenerateCaseDialog(
                                 shape = CircleShape,
                             )
                         }
+                        FilterChip(
+                            selected = difficulty == null,
+                            onClick = { difficulty = null },
+                            label = { Text("随机") },
+                            shape = CircleShape,
+                        )
                     }
                 }
                 PersonalitySelector(
                     selected = personality,
                     onSelected = { personality = it },
+                    includeRandom = true,
                 )
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("就诊类型", style = MaterialTheme.typography.titleSmall)
@@ -648,6 +691,12 @@ private fun GenerateCaseDialog(
                                 shape = CircleShape,
                             )
                         }
+                        FilterChip(
+                            selected = encounterType == null,
+                            onClick = { encounterType = null },
+                            label = { Text("随机") },
+                            shape = CircleShape,
+                        )
                     }
                 }
                 if (!hasApiKey) {
@@ -674,7 +723,15 @@ private fun GenerateCaseDialog(
             Button(
                 onClick = {
                     if (hasApiKey) {
-                        onGenerate(department, difficulty, personality, encounterType)
+                        onGenerate(
+                            CaseGenerationSelection(
+                                department = department,
+                                groupLabel = groupLabel,
+                                difficulty = difficulty,
+                                personality = personality,
+                                encounterType = encounterType,
+                            ),
+                        )
                     } else {
                         onOpenSettings()
                     }
@@ -713,7 +770,7 @@ internal fun PersonalityPickerDialog(
                 PersonalitySelector(
                     age = medicalCase.patient.age,
                     selected = personality,
-                    onSelected = { personality = it },
+                    onSelected = { selected -> selected?.let { personality = it } },
                 )
                 Text("就诊类型", style = MaterialTheme.typography.titleSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -746,12 +803,17 @@ internal fun PersonalityPickerDialog(
 @Composable
 private fun PersonalitySelector(
     age: String? = null,
-    selected: PatientPersonality,
-    onSelected: (PatientPersonality) -> Unit,
+    selected: PatientPersonality?,
+    onSelected: (PatientPersonality?) -> Unit,
+    includeRandom: Boolean = false,
 ) {
+    val options = buildList<PatientPersonality?> {
+        if (includeRandom) add(null)
+        addAll(PatientPersonality.entries.filter { age == null || it.availableFor(age) })
+    }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("患者性格", style = MaterialTheme.typography.titleSmall)
-        PatientPersonality.entries.filter { age == null || it.availableFor(age) }.chunked(2).forEach { rowItems ->
+        options.chunked(2).forEach { rowItems ->
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -762,7 +824,7 @@ private fun PersonalitySelector(
                         onClick = { onSelected(personality) },
                         label = {
                             Text(
-                                text = personality.label,
+                                text = personality?.label ?: "随机",
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
@@ -777,7 +839,7 @@ private fun PersonalitySelector(
             }
         }
         Text(
-            text = selected.description,
+            text = selected?.description ?: "将从全部性格中随机选择",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
