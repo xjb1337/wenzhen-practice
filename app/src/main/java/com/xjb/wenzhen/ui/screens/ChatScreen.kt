@@ -1,11 +1,9 @@
 package com.xjb.wenzhen.ui.screens
 
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.foundation.layout.ime
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -51,6 +49,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -60,6 +59,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -114,10 +114,11 @@ fun ChatScreen(
     onDismissNotice: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
+    var chatListHeight by remember { mutableIntStateOf(0) }
     val showTyping = isPatientTyping && messages.lastOrNull()?.let {
         it.role != MessageRole.PATIENT || it.deliveryState != MessageDeliveryState.SENDING
     } != false
-    val messageCount = messages.size + if (showTyping) 1 else 0
+    val messageCount = messages.size + if (showTyping || isQueryingClinical) 1 else 0
     var elapsedSeconds by remember(startedAtMillis) { mutableLongStateOf(0L) }
     var coverageExpanded by rememberSaveable { mutableStateOf(coverageInitiallyExpanded) }
     var clinicalType by remember { mutableStateOf<ClinicalRequestType?>(null) }
@@ -131,16 +132,15 @@ fun ChatScreen(
     }
     val timer = formatElapsed(elapsedSeconds)
 
-    LaunchedEffect(messageCount) {
-        if (messageCount > 0) {
-            listState.animateScrollToItem(messageCount)
-        }
-    }
-    // 输入法弹起时消息列表视口变小，自动滚到最新消息，避免最后几条被输入栏/键盘挡住。
-    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-    LaunchedEffect(imeVisible) {
-        if (imeVisible && messageCount > 0) {
-            listState.animateScrollToItem(messageCount)
+    // 消息变化或输入法弹起/收起导致 LazyColumn 高度变化时，先定位到最后一个 item，再向下
+    // 滚到底（scrollBy 会在列表底部自动截断）。这样不依赖 WindowInsets.ime：Android 9 的
+    // adjustResize 下键盘动画期间 ime inset 可能一直是 0，只能靠布局高度变化来判断。
+    LaunchedEffect(messageCount, chatListHeight) {
+        if (messageCount > 0 && chatListHeight > 0) {
+            // LazyColumn 的第 0 项是问诊提示、第 1 项是患者卡，消息从第 2 项开始，
+            // 所以最后一项的下标是 messageCount + 1（messageCount 已包含“患者正在输入”项）。
+            listState.scrollToItem(messageCount + 1)
+            listState.scrollBy(100_000f)
         }
     }
     LaunchedEffect(startedAtMillis) {
@@ -151,7 +151,9 @@ fun ChatScreen(
     }
 
     Scaffold(
-        modifier = modifier.fillMaxSize(),
+        // IME padding 必须加在 Scaffold 外层：如果加在底部输入栏内部，Scaffold 会把整块键盘高度
+        // 计入 bottomBar，聊天列表被压到接近 0 高，键盘弹起后无论怎么滚都看不到最新消息。
+        modifier = modifier.fillMaxSize().imePadding(),
         topBar = {
             WenzhenTopBar(
                 title = medicalCase.title,
@@ -221,13 +223,6 @@ fun ChatScreen(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
                 )
             }
-            CoverageHintBar(
-                report = coverage,
-                timer = timer,
-                expanded = coverageExpanded,
-                onToggle = { coverageExpanded = !coverageExpanded },
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
-            )
             if (lastReplyMillis != null || contextWarning) {
                 Row(
                     modifier = Modifier
@@ -256,10 +251,20 @@ fun ChatScreen(
                 state = listState,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .onSizeChanged { chatListHeight = it.height },
                 contentPadding = PaddingValues(start = 18.dp, end = 18.dp, top = 8.dp, bottom = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
+                item {
+                    CoverageHintBar(
+                        report = coverage,
+                        timer = timer,
+                        expanded = coverageExpanded,
+                        onToggle = { coverageExpanded = !coverageExpanded },
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    )
+                }
                 item {
                     PatientSummaryCard(medicalCase = medicalCase)
                 }
@@ -615,8 +620,7 @@ private fun ChatComposer(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .navigationBarsPadding()
-            .imePadding(),
+            .navigationBarsPadding(),
         color = MaterialTheme.colorScheme.surface,
         shadowElevation = 8.dp,
     ) {
@@ -653,7 +657,8 @@ private fun ChatComposer(
                     onValueChange = { input = it },
                     modifier = Modifier
                         .weight(1f)
-                        .widthIn(min = 0.dp),
+                        .widthIn(min = 0.dp)
+                        .bringIntoViewOnFocus(),
                     placeholder = { Text("输入你的问诊问题…") },
                     maxLines = 4,
                     shape = RoundedCornerShape(20.dp),
