@@ -42,8 +42,10 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
@@ -490,6 +492,58 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `结束问诊提交中开启新病例时旧结果只写入历史`() = runTest(dispatcher) {
+        val oldCase = BuiltInCases.all.first()
+        val newCase = BuiltInCases.all[1]
+        val client = BlockingClient()
+        val vm = viewModel(client)
+        val events = mutableListOf<AppEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(dispatcher.scheduler)) { vm.events.collect { events += it } }
+
+        vm.finishConsultation(
+            initialDiagnosis = oldCase.correctDiagnosis,
+            diagnosisBasis = oldCase.auxiliaryExams,
+            generateRecord = false,
+        )
+        advanceUntilIdle()
+        assertTrue("评分应处于阻塞中", vm.uiState.value.isFinishing)
+
+        // 提交尚未返回时返回并开启另一病例：旧协程不能被取消，只能写入历史。
+        vm.openCase(newCase)
+        advanceUntilIdle()
+        assertEquals(newCase.id, vm.uiState.value.activeCase?.id)
+
+        client.releaseScore()
+        waitUntil {
+            events.any {
+                it is AppEvent.ShowMessage && it.message == "上一次问诊「${oldCase.title}」已保存到历史记录。"
+            }
+        }
+        advanceUntilIdle()
+
+        assertEquals(newCase.id, vm.uiState.value.activeCase?.id)
+        assertNull(vm.uiState.value.currentResult)
+        assertTrue("旧问诊不能打开结果页", events.none { it is AppEvent.OpenResult })
+        assertTrue(
+            "events=$events",
+            events.filterIsInstance<AppEvent.ShowMessage>().any {
+                it.message == "上一次问诊「${oldCase.title}」已保存到历史记录。"
+            },
+        )
+        val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
+        assertEquals(1, records.size)
+        assertEquals(oldCase.title, records.single().caseTitle)
+
+        // 新问诊的草稿保存仍然正常，且保存的是新病例而不是旧问诊。
+        vm.sendMessage("新问诊的提问")
+        advanceUntilIdle()
+        waitUntil { runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() } != null }
+        val draft = runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() }
+        assertNotNull(draft)
+        assertEquals(newCase.id, CaseJsonCodec.decode(draft!!.caseJson).id)
+    }
+
+    @Test
     fun `评分请求抛出LlmException时按规则分写入历史并清除草稿`() = runTest(dispatcher) {
         val medicalCase = BuiltInCases.all.first()
         val conversation = listOf(
@@ -895,12 +949,24 @@ class AppViewModelTest {
     }
 
     private class BlockingClient : LlmClient {
+        private val scoreRelease = CompletableDeferred<Unit>()
+
+        fun releaseScore() {
+            scoreRelease.complete(Unit)
+        }
+
         override suspend fun complete(
             config: LlmConfig,
             messages: List<LlmMessage>,
             jsonMode: Boolean,
             temperature: Double,
-        ): String = awaitCancellation()
+        ): String {
+            if (jsonMode) {
+                scoreRelease.await()
+                return VALID_SCORE_JSON
+            }
+            return awaitCancellation()
+        }
 
         override suspend fun stream(
             config: LlmConfig,

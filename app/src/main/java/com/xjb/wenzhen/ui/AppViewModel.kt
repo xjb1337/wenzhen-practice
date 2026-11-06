@@ -706,6 +706,8 @@ class AppViewModel(
         val conversation = state.messages.toList()
         val config = state.settings.toLlmConfig()
         val referenceCarePlan = ReferenceCarePlanBuilder.build(medicalCase, state.encounterType)
+        // 记下本次提交所属的问诊会话，完成后据此判断用户是否已经切到另一场问诊。
+        val sessionKey = medicalCase.id to state.consultationStartedAt
         _uiState.update { it.copy(isFinishing = true, finishError = null) }
         viewModelScope.launch {
             try {
@@ -806,6 +808,16 @@ class AppViewModel(
                 )
                 // 先写入历史：保存失败会进入 catch，此时不清草稿、不离开结束页。
                 val resultId = container.consultationRepository.save(entity)
+                val stillSame = _uiState.value.activeCase?.id == sessionKey.first &&
+                    _uiState.value.consultationStartedAt == sessionKey.second
+                if (!stillSame) {
+                    // 提交期间用户已返回并开启新问诊：旧结果只入历史，不再驱动当前界面。
+                    _uiState.update { it.copy(isFinishing = false) }
+                    _events.send(
+                        AppEvent.ShowMessage("上一次问诊「${medicalCase.title}」已保存到历史记录。")
+                    )
+                    return@launch
+                }
                 val notice = listOfNotNull(
                     if (score.aiCommentFailed) {
                         "AI 点评生成失败，分数已按本地规则计算并保存到历史记录，可在“点评”页重新生成：" +
@@ -851,10 +863,16 @@ class AppViewModel(
                 _uiState.update { it.copy(draft = null) }
                 _events.send(AppEvent.OpenResult)
             } catch (error: Exception) {
+                val stillSame = _uiState.value.activeCase?.id == sessionKey.first &&
+                    _uiState.value.consultationStartedAt == sessionKey.second
                 _uiState.update {
                     it.copy(
                         isFinishing = false,
-                        finishError = friendlyMessage(error, "病历或评分生成失败，请稍后重试。"),
+                        finishError = if (stillSame) {
+                            friendlyMessage(error, "病历或评分生成失败，请稍后重试。")
+                        } else {
+                            null
+                        },
                     )
                 }
             }

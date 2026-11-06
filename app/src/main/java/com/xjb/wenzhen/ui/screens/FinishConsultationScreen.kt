@@ -1,5 +1,6 @@
 package com.xjb.wenzhen.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.consumeWindowInsets
@@ -70,13 +71,16 @@ fun FinishConsultationScreen(
     var generateRecord by rememberSaveable { mutableStateOf(initialGenerateRecord) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
 
+    // 提交中禁止返回：既隐藏顶栏返回键，也吞掉系统返回，避免退出后旧结果劫持新问诊。
+    BackHandler(enabled = isSubmitting) { }
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             WenzhenTopBar(
                 title = "结束问诊",
                 subtitle = "$caseTitle · $patientName",
-                onBack = onBack,
+                onBack = if (isSubmitting) null else onBack,
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
