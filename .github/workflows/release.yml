@@ -79,13 +79,19 @@ jobs:
         env:
           EXPECTED_CERT: ${{ secrets.ANDROID_EXPECTED_CERT_SHA256 }}
         run: |
+          set -euo pipefail
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/wenzhen-practice.apk
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -type f -name apksigner | sort -V | tail -1)
           OUT=$("$APKSIGNER" verify --print-certs dist/wenzhen-practice.apk)
           echo "$OUT"
+          EXPECTED_FROM_SOURCE=$(grep -oE 'RELEASE_CERT_SHA256", "\\"[0-9a-f]{64}' app/build.gradle.kts | grep -oE '[0-9a-f]{64}' || true)
+          test -n "$EXPECTED_FROM_SOURCE" || { echo "无法从 build.gradle.kts 读取 RELEASE_CERT_SHA256"; exit 1; }
+          SIGNERS=$(echo "$OUT" | grep -c 'certificate SHA-256 digest' || true)
+          test "$SIGNERS" = "1" || { echo "签名者数量异常：$SIGNERS"; exit 1; }
           CERT=$(echo "$OUT" | grep -m1 'certificate SHA-256 digest' | awk '{print $NF}' | tr -d ':' | tr 'A-F' 'a-f')
-          if [ -n "$EXPECTED_CERT" ]; then test "$CERT" = "$(echo "$EXPECTED_CERT" | tr -d ':' | tr 'A-F' 'a-f')" || { echo "签名证书不一致"; exit 1; }; fi
+          test "$CERT" = "$EXPECTED_FROM_SOURCE" || { echo "签名证书与 build.gradle.kts 中的 RELEASE_CERT_SHA256 不一致"; exit 1; }
+          if [ -n "$EXPECTED_CERT" ]; then test "$CERT" = "$(echo "$EXPECTED_CERT" | tr -d ':' | tr 'A-F' 'a-f')" || { echo "签名证书与 ANDROID_EXPECTED_CERT_SHA256 不一致"; exit 1; }; fi
           echo "APK_CERT_SHA256=$CERT" >> "$GITHUB_ENV"
           (cd dist && sha256sum wenzhen-practice.apk > wenzhen-practice.apk.sha256)
           cat dist/wenzhen-practice.apk.sha256
