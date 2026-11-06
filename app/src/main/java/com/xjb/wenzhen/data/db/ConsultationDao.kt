@@ -29,7 +29,7 @@ interface ConsultationDao {
     suspend fun insert(entity: ConsultationEntity): Long
 
     @Query(
-        "SELECT COUNT(*) FROM consultations WHERE caseJson = :caseJson AND createdAt = :createdAt",
+        "SELECT COUNT(*) FROM consultations WHERE createdAt = :createdAt AND caseJson = :caseJson",
     )
     suspend fun countBySignature(caseJson: String, createdAt: Long): Int
 

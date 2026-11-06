@@ -3,8 +3,9 @@ package com.xjb.wenzhen.data.db
 import androidx.room.Entity
 import androidx.room.PrimaryKey
 import androidx.room.ColumnInfo
+import androidx.room.Index
 
-@Entity(tableName = "consultations")
+@Entity(tableName = "consultations", indices = [Index("createdAt")])
 data class ConsultationEntity(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0,

@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [ConsultationEntity::class, ConsultationDraftEntity::class, SavedCaseEntity::class],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,7 +27,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "wenzhen_practice.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                     .build()
                     .also { instance = it }
             }
@@ -68,6 +68,16 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(database: SupportSQLiteDatabase) {
                 database.execSQL(MIGRATION_4_5_SQL)
+            }
+        }
+
+        // restoreAll 的 countBySignature 按 createdAt + caseJson 去重，索引名称须与 Room 由
+        // ConsultationEntity.indices 生成的期望一致，否则 onUpgrade 后的结构校验会失败。
+        const val MIGRATION_5_6_SQL =
+            "CREATE INDEX IF NOT EXISTS index_consultations_createdAt ON consultations(createdAt)"
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(MIGRATION_5_6_SQL)
             }
         }
     }

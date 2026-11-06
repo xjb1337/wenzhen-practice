@@ -40,7 +40,7 @@ class MigrationSqlTest {
     }
 
     @Test
-    fun `迁移版本连续注册到数据库版本三`() {
+    fun `迁移版本连续注册到数据库版本六`() {
         assertEquals(1, AppDatabase.MIGRATION_1_2.startVersion)
         assertEquals(2, AppDatabase.MIGRATION_1_2.endVersion)
         assertEquals(2, AppDatabase.MIGRATION_2_3.startVersion)
@@ -49,6 +49,8 @@ class MigrationSqlTest {
         assertEquals(4, AppDatabase.MIGRATION_3_4.endVersion)
         assertEquals(4, AppDatabase.MIGRATION_4_5.startVersion)
         assertEquals(5, AppDatabase.MIGRATION_4_5.endVersion)
+        assertEquals(5, AppDatabase.MIGRATION_5_6.startVersion)
+        assertEquals(6, AppDatabase.MIGRATION_5_6.endVersion)
     }
 
     @Test
@@ -75,5 +77,17 @@ class MigrationSqlTest {
         assertTrue(sql.contains("favorite INTEGER NOT NULL"))
         assertFalse("迁移 SQL 不得再携带 DEFAULT 0", sql.contains("DEFAULT"))
         assertTrue(sql.contains("PRIMARY KEY(id)"))
+    }
+
+    @Test
+    fun `v5到v6为病例创建时间创建索引且不破坏数据`() {
+        val sql = AppDatabase.MIGRATION_5_6_SQL
+
+        assertEquals(
+            "CREATE INDEX IF NOT EXISTS index_consultations_createdAt ON consultations(createdAt)",
+            sql,
+        )
+        assertFalse(sql.contains("DROP TABLE", ignoreCase = true))
+        assertFalse(sql.contains("DELETE FROM", ignoreCase = true))
     }
 }

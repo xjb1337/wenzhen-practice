@@ -73,4 +73,25 @@ class MigrationExecutionTest {
             assertEquals(0, cursor.getInt(0))
         }
     }
+
+    @Test
+    fun `从版本5升级到版本6创建createdAt索引并保留旧记录`() {
+        db.execSQL(AppDatabase.MIGRATION_5_6_SQL)
+
+        db.rawQuery("SELECT caseTitle, totalScore FROM consultations", null).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("旧记录", cursor.getString(0))
+            assertEquals(82, cursor.getInt(1))
+            assertEquals(1, cursor.count)
+        }
+
+        var indexFound = false
+        db.rawQuery("PRAGMA index_list(consultations)", null).use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                if (name == "index_consultations_createdAt") indexFound = true
+            }
+        }
+        assertTrue("缺少 index_consultations_createdAt 索引", indexFound)
+    }
 }
