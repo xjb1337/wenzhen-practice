@@ -86,6 +86,14 @@ class AppViewModel(
         observeSavedCases()
     }
 
+    override fun onCleared() {
+        // viewModelScope 会取消状态观察和请求；关闭后也不再接受迟到的草稿刷新。
+        draftPersistenceEnabled = false
+        draftSaveJob?.cancel()
+        draftSaveJob = null
+        super.onCleared()
+    }
+
     fun selectDepartment(department: String) {
         _uiState.update { it.copy(selectedDepartment = department) }
     }
