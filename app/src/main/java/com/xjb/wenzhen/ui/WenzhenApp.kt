@@ -283,7 +283,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         onBack = { navController.popBackStack() },
                         onSubmit = viewModel::finishConsultation,
                         initialGenerateRecord = uiState.settings.generateRecord,
-                        thinkingLevel = uiState.settings.thinkingLevel,
+                        thinkingLevel = uiState.settings.toLlmConfig().thinkingLevel,
                         isSubmitting = uiState.isFinishing,
                         errorMessage = uiState.finishError,
                         onDismissError = viewModel::clearFinishError,

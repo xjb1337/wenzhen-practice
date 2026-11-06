@@ -129,12 +129,14 @@ class SettingsRepositoryTest {
             deviceId = "device-123",
             sessionToken = "session-token",
             relayBaseUrl = "https://relay.example.com/",
+            thinkingLevel = ThinkingLevel.MAX,
         ).toLlmConfig()
 
         assertEquals("session-token", config.apiKey)
         assertEquals(AppSettings.MODEL_FLASH, config.model)
         assertEquals("https://relay.example.com", config.baseUrl)
         assertEquals("device-123", config.deviceId)
+        assertEquals(ThinkingLevel.OFF, config.thinkingLevel)
         assertTrue(config.useRelay)
     }
 

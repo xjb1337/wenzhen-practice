@@ -63,7 +63,8 @@ data class AppSettings(
             apiKey = sessionToken.trim(),
             model = MODEL_FLASH,
             baseUrl = relayBaseUrl.trim().ifBlank { RELAY_BASE_URL }.trimEnd('/'),
-            thinkingLevel = thinkingLevel,
+            // 内置服务固定关闭思考模式；设置中保留的用户选择仅用于「自己的 Key」。
+            thinkingLevel = ThinkingLevel.OFF,
             deviceId = deviceId.trim(),
             useRelay = true,
         )

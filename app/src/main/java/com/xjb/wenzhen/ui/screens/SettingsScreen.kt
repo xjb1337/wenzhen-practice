@@ -544,13 +544,21 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(title = "思考强度") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ThinkingLevel.entries.forEach { level ->
-                            androidx.compose.material3.FilterChip(
-                                selected = thinkingLevel == level,
-                                onClick = { thinkingLevel = level },
-                                label = { Text(level.label) },
-                            )
+                    if (apiSource == ApiSource.BUILTIN) {
+                        Text(
+                            text = "内置服务不支持思考模式",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    } else {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            ThinkingLevel.entries.forEach { level ->
+                                androidx.compose.material3.FilterChip(
+                                    selected = thinkingLevel == level,
+                                    onClick = { thinkingLevel = level },
+                                    label = { Text(level.label) },
+                                )
+                            }
                         }
                     }
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {

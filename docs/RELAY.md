@@ -42,7 +42,7 @@ const val RELAY_BASE_URL = "https://wenzhen-relay.wenzhen-xjb1337.workers.dev"
 
 `POST /v1/chat/completions`
 
-请求体与 OpenAI/DeepSeek Chat Completions 兼容。请求头：
+请求体与 OpenAI/DeepSeek Chat Completions 兼容。`model` 字段由 Worker 决定，客户端值仅占位。请求头：
 
 ```text
 Authorization: Bearer <sessionToken>
