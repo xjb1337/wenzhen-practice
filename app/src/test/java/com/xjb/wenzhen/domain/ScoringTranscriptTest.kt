@@ -43,6 +43,17 @@ class ScoringTranscriptTest {
     }
 
     @Test
+    fun `系统预置开场白在评分转写中标注不计入评分`() {
+        val messages = listOf(
+            ChatMessage(MessageRole.DOCTOR, DOCTOR_OPENING_LINE),
+            ChatMessage(MessageRole.PATIENT, "胸口疼"),
+        )
+        val prompt = promptBuilder.buildScoreUserPrompt(messages, "", "")
+        assertTrue(prompt.contains("[1] 医生（系统预置开场白，不计入评分）：$DOCTOR_OPENING_LINE"))
+        assertTrue(prompt.contains("[2] 患者：胸口疼"))
+    }
+
+    @Test
     fun `评分规则要求语义等价计分并引用证据`() {
         val prompt = promptBuilder.buildScoreSystemPrompt(medicalCase)
         assertTrue(prompt.contains("语义等价即算问到"))

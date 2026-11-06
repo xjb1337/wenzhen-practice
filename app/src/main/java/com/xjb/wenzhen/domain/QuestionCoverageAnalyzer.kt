@@ -39,6 +39,7 @@ object QuestionCoverageAnalyzer {
     fun analyze(medicalCase: MedicalCase, messages: List<ChatMessage>): List<QuestionEvidence> {
         val transcript = transcriptEntries(messages)
         val usable = transcript.withIndex()
+            .filterNot { isScriptedOpening(it.index, it.value) }
             .filter { it.value.role == MessageRole.DOCTOR }
             .map { IndexedValue(it.index, it.value.content.lowercase()) }
         return matchTerms(medicalCase).map { terms ->

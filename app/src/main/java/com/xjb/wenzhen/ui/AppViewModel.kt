@@ -27,6 +27,7 @@ import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.CaseGenerationSelection
+import com.xjb.wenzhen.domain.DOCTOR_OPENING_LINE
 import com.xjb.wenzhen.domain.OfflinePracticeService
 import com.xjb.wenzhen.domain.ReferenceCarePlanBuilder
 import com.xjb.wenzhen.domain.RuleScoreCalculator
@@ -47,9 +48,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import java.util.UUID
-
-/** 新问诊固定由医生先开口，随后患者再描述主诉；旧草稿恢复时也会补上这句。 */
-internal const val DOCTOR_OPENING_LINE = "您好，我是接诊医生。请问您哪里不舒服？"
 
 class AppViewModel(
     private val container: AppContainer,

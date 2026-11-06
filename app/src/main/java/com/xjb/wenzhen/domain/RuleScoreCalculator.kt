@@ -75,6 +75,7 @@ object RuleScoreCalculator {
 
         // 与证据编号同一口径：transcriptEntries 的 1-based 下标，只含已送达的医生消息。
         val doctorMessages = transcriptEntries(messages).withIndex()
+            .filterNot { isScriptedOpening(it.index, it.value) }
             .filter { it.value.role == MessageRole.DOCTOR }
             .map { DoctorMessage(index = it.index + 1, content = it.value.content) }
         val relevantIndexes = analysis.flatMap { it.messageIndexes }.toSet()

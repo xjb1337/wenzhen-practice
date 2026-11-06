@@ -29,6 +29,7 @@ import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.SettingsRepository
 import com.xjb.wenzhen.domain.AiCommentStatus
+import com.xjb.wenzhen.domain.DOCTOR_OPENING_LINE
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult

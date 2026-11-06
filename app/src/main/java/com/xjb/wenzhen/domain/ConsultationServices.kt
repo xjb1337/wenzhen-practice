@@ -293,7 +293,9 @@ object ScoreReconciler {
         val transcript = transcriptEntries(messages)
         val valid = refs.filter { match ->
             val index = match.groupValues[1].toIntOrNull() ?: return@filter false
-            index in 1..transcript.size && transcript[index - 1].role != MessageRole.SYSTEM
+            index in 1..transcript.size &&
+                transcript[index - 1].role != MessageRole.SYSTEM &&
+                !isScriptedOpening(index - 1, transcript[index - 1])
         }
         if (valid.isEmpty()) return null
         var cleaned = point

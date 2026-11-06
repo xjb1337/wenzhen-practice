@@ -15,6 +15,8 @@ class QuestionCoverageAnalyzerTest {
 
     private fun doctor(content: String) = ChatMessage(role = MessageRole.DOCTOR, content = content)
 
+    private fun patient(content: String) = ChatMessage(role = MessageRole.PATIENT, content = content)
+
     private fun coveredCount(case: MedicalCase, vararg lines: String): Int =
         QuestionCoverageAnalyzer.analyze(case, lines.map { doctor(it) }).count { it.covered }
 
@@ -43,6 +45,32 @@ class QuestionCoverageAnalyzerTest {
                 assertEquals("病例 ${case.id} 被“$line”覆盖", 0, coveredCount(case, line))
             }
         }
+    }
+
+    @Test
+    fun `系统预置开场白和患者开场不覆盖任何要点`() {
+        val evidence = QuestionCoverageAnalyzer.analyze(
+            cardio,
+            listOf(doctor(DOCTOR_OPENING_LINE), patient(cardio.openingLine)),
+        )
+        assertTrue(evidence.all { !it.covered })
+        assertTrue(evidence.all { it.messageIndexes.isEmpty() })
+    }
+
+    @Test
+    fun `学生补问主诉后覆盖且证据编号为3`() {
+        val caseWithChiefComplaint = cardio.copy(
+            keyQuestions = listOf("主诉：哪里不舒服、怎么不舒服") + cardio.keyQuestions,
+        )
+        val messages = listOf(
+            doctor(DOCTOR_OPENING_LINE),
+            patient(cardio.openingLine),
+            doctor("请问您哪里不舒服？"),
+        )
+        val chiefComplaint = QuestionCoverageAnalyzer.analyze(caseWithChiefComplaint, messages)
+            .first { it.question == "主诉：哪里不舒服、怎么不舒服" }
+        assertTrue(chiefComplaint.covered)
+        assertEquals(listOf(3), chiefComplaint.messageIndexes)
     }
 
     @Test

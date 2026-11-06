@@ -264,10 +264,11 @@ class PromptBuilder {
         val usable = transcriptEntries(messages)
         if (usable.isEmpty()) return "（无对话）"
         return usable.mapIndexed { index, message ->
-            val speaker = when (message.role) {
-                MessageRole.DOCTOR -> "医生"
-                MessageRole.PATIENT -> "患者"
-                MessageRole.SYSTEM -> "系统检查" + (message.systemTitle?.let { "（$it）" } ?: "")
+            val speaker = when {
+                isScriptedOpening(index, message) -> "医生（系统预置开场白，不计入评分）"
+                message.role == MessageRole.DOCTOR -> "医生"
+                message.role == MessageRole.PATIENT -> "患者"
+                else -> "系统检查" + (message.systemTitle?.let { "（$it）" } ?: "")
             }
             "[${index + 1}] $speaker：${message.content}"
         }.joinToString(separator = "\n")
@@ -278,6 +279,10 @@ class PromptBuilder {
         return number < 14
     }
 }
+
+/** 第 1 条、医生角色、内容等于预置开场白：这是系统代发的，不是学生的提问。 */
+internal fun isScriptedOpening(index: Int, message: ChatMessage): Boolean =
+    index == 0 && message.role == MessageRole.DOCTOR && message.content == DOCTOR_OPENING_LINE
 
 /**
  * 拼装请求体与评分转写共用的“有效消息”列表：

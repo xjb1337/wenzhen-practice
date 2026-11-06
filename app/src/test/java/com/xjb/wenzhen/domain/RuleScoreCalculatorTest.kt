@@ -11,7 +11,7 @@ import org.junit.Test
 /** C-2 验收：单字诊断、空话技巧分、治疗分等对抗场景，以及合理作答不被低估。 */
 class RuleScoreCalculatorTest {
     private val medicalCase = BuiltInCases.byId("cardio-chest-pain")!!
-    private val openingLine = "您好，我是接诊医生。请问您哪里不舒服？"
+    private val openingLine = DOCTOR_OPENING_LINE
 
     private fun doctor(content: String) = ChatMessage(role = MessageRole.DOCTOR, content = content)
 
@@ -110,6 +110,18 @@ class RuleScoreCalculatorTest {
                 assertEquals("病例 ${case.id} 的空话不应覆盖任何要点", 0, score.coverage)
             }
         }
+    }
+
+    @Test
+    fun `只有系统预置开场白和患者开场时技巧沟通覆盖都为0`() {
+        val score = RuleScoreCalculator.compute(
+            medicalCase = medicalCase,
+            messages = listOf(doctor(openingLine), patient(medicalCase.openingLine)),
+        )
+        assertEquals(0, score.technique)
+        assertEquals(0, score.communication)
+        assertEquals(0, score.coverage)
+        assertTrue(score.evidence.all { it.messageIndexes.isEmpty() })
     }
 
     @Test
