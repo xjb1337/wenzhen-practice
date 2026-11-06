@@ -28,6 +28,7 @@ import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.CaseGenerationSelection
 import com.xjb.wenzhen.domain.OfflinePracticeService
+import com.xjb.wenzhen.domain.ReferenceCarePlanBuilder
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
 import com.xjb.wenzhen.ui.theme.AppTheme
@@ -636,6 +637,7 @@ class AppViewModel(
 
         val conversation = state.messages.toList()
         val config = state.settings.toLlmConfig()
+        val referenceCarePlan = ReferenceCarePlanBuilder.build(medicalCase, state.encounterType)
         _uiState.update { it.copy(isFinishing = true, finishError = null) }
         viewModelScope.launch {
             try {
@@ -766,6 +768,7 @@ class AppViewModel(
                     treatmentAnswer = treatmentAnswer.trim(),
                     encounterType = state.encounterType,
                     messages = conversation,
+                    referenceCarePlan = referenceCarePlan,
                     notice = notice,
                 )
                 _uiState.update {
@@ -1141,6 +1144,8 @@ class AppViewModel(
                 val entity = container.consultationRepository.getById(id)
                     ?: throw IllegalStateException("这条问诊记录不存在或已被删除。")
                 val score = ScoreParser.parse(entity.scoreJson)
+                val encounterType = EncounterType.from(entity.encounterType)
+                val medicalCase = runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
                 val result = ResultViewData(
                     recordId = entity.id,
                     caseTitle = entity.caseTitle,
@@ -1152,8 +1157,11 @@ class AppViewModel(
                     score = score,
                     initialDiagnosis = entity.initialDiagnosis,
                     treatmentAnswer = entity.treatmentAnswer,
-                    encounterType = EncounterType.from(entity.encounterType),
+                    encounterType = encounterType,
                     messages = ConversationJsonCodec.decode(entity.conversationJson),
+                    referenceCarePlan = medicalCase?.let {
+                        ReferenceCarePlanBuilder.build(it, encounterType)
+                    },
                 )
                 _uiState.update {
                     it.copy(

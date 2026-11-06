@@ -143,6 +143,10 @@ class PromptBuilder {
         【本病例真实资料，仅供评分，不得改写为对话中已获得的信息】
         正确诊断：${medicalCase.correctDiagnosis}
         鉴别诊断：${medicalCase.differentialDiagnoses.joinToString("、")}
+        主诉：${medicalCase.chiefComplaint}
+        现病史：${medicalCase.presentIllness}
+        体格检查：${medicalCase.physicalExam}
+        辅助检查：${medicalCase.auxiliaryExams}
         问诊要点：
         ${medicalCase.keyQuestions.joinToString(separator = "\n") { "- $it" }}
 
@@ -157,6 +161,7 @@ class PromptBuilder {
         分项满分：问诊要点覆盖35分，问诊技巧与顺序15分，医患沟通15分，诊断准确20分，治疗方案15分，总分100分。
         诊断准确项应将学生初步诊断与正确诊断比较；学生诊断明显错误或不完整时应明显扣分。
         治疗方案项应将学生填写的治疗方案与参考方案比较；未填写或明显遗漏关键处理时应明显扣分。
+        diagnosisExplanation 只能依据上述病例资料解释诊断与关键鉴别点，不得补充病例中未提供的检查项目、数值、病原学结果或治疗反应。
 
         只输出一个合法 JSON 对象，不要Markdown代码围栏，不要前后解释。JSON 必须符合以下结构：
         {
@@ -234,15 +239,17 @@ class PromptBuilder {
           "keyQuestions": ["10至15条具体问诊要点"],
           "correctDiagnosis": "正确诊断",
           "differentialDiagnoses": ["至少2条鉴别诊断"]
-          ,"treatmentPlan": "治疗原则、主流中国指南药物及剂量、随访安排"
+          ,"treatmentPlan": "治疗原则：...\n药物：...\n处理：...\n随访：..."
         }
 
         要求：
         1. 所有字段都必须非空，内容符合中国临床场景和所选科室、难度、就诊类型。
         2. keyQuestions 必须正好有10至15条，覆盖主要病史、伴随症状、既往史、危险因素和鉴别要点。
         3. 开场白只包含患者能感知的症状，不得直接公布诊断、化验或影像结论。
-        4. 体格检查和辅助检查应支持正确诊断，同时保留合理鉴别空间。
-        5. 不要虚构医生已经完成的诊疗过程；内容用于教学，避免侵权和真实个人信息。
+        4. 体格检查和辅助检查应支持正确诊断，同时保留合理鉴别空间；auxiliaryExams 必须包含本病例诊断所需的关键检查及结果。
+        5. treatmentPlan 必须逐行包含“治疗原则：”“药物：”“处理：”“随访：”四个部分并全部非空；药物使用通用名、剂量和疗程，处理写明门诊或住院可执行的关键措施，随访写明复查与警示症状。
+        6. treatmentPlan 必须与患者年龄、性别、病情严重程度、既往史、过敏史和当前就诊类型相符；不得加入病例资料无法支持的检查、诊断、药物或手术。
+        7. 不要虚构医生已经完成的诊疗过程；内容用于教学，避免侵权和真实个人信息。
     """.trimIndent()
         .let { prompt ->
             if (departmentHint.isBlank()) {

@@ -40,12 +40,12 @@ object CaseJsonCodec {
 
     fun decode(raw: String): MedicalCase {
         val json = extractJsonObject(raw)
-        return parseObject(json)
+        return parseObject(json, requireTreatmentPlan = false)
     }
 
     fun parseGenerated(raw: String, department: String, difficulty: Difficulty): MedicalCase {
         val json = extractJsonObject(raw)
-        val parsed = parseObject(json)
+        val parsed = parseObject(json, requireTreatmentPlan = true)
         return parsed.copy(
             id = "ai-${UUID.randomUUID()}",
             department = department,
@@ -54,7 +54,10 @@ object CaseJsonCodec {
         )
     }
 
-    private fun parseObject(json: JSONObject): MedicalCase {
+    private fun parseObject(
+        json: JSONObject,
+        requireTreatmentPlan: Boolean,
+    ): MedicalCase {
         val patientJson = json.optJSONObject("patient") ?: json.optJSONObject("患者信息")
         val name = patientJson?.readText("name", "姓名") ?: ""
         val age = patientJson?.readText("age", "年龄") ?: ""
@@ -114,6 +117,7 @@ object CaseJsonCodec {
             if (medicalCase.auxiliaryExams.isBlank()) add("辅助检查")
             if (medicalCase.correctDiagnosis.isBlank()) add("正确诊断")
             if (medicalCase.differentialDiagnoses.isEmpty()) add("鉴别诊断")
+            if (requireTreatmentPlan && medicalCase.treatmentPlan.isBlank()) add("治疗方案")
         }
         if (missing.isNotEmpty()) {
             throw CaseParseException("AI 返回的病例缺少${missing.joinToString("、")}，请重试。")

@@ -14,10 +14,12 @@ import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.db.ConsultationEntity
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.Departments
+import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.domain.ReferenceCarePlanBuilder
 import com.xjb.wenzhen.domain.StatsCalculator
 import com.xjb.wenzhen.domain.StatsRecord
 import com.xjb.wenzhen.ui.screens.CaseLibraryScreen
@@ -402,6 +404,7 @@ class ScreenshotTest {
                 medicalRecord = "",
                 score = score,
                 initialDiagnosis = "急性心肌梗死",
+                referenceCarePlan = ReferenceCarePlanBuilder.build(medicalCase, EncounterType.OUTPATIENT),
                 onBack = {},
             )
         }
@@ -422,6 +425,7 @@ class ScreenshotTest {
             onBack = {},
             initialTab = initialTab,
             messages = messages,
+            referenceCarePlan = ReferenceCarePlanBuilder.build(medicalCase, EncounterType.OUTPATIENT),
         )
     }
 

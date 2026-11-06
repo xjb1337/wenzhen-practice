@@ -53,6 +53,10 @@ class PromptBuilderTest {
         assertTrue(prompt.contains("总分等于五项之和"))
         assertTrue(prompt.contains("\"totalScore\""))
         assertTrue(prompt.contains("只输出一个合法 JSON 对象"))
+        assertTrue(prompt.contains(medicalCase.chiefComplaint))
+        assertTrue(prompt.contains(medicalCase.physicalExam))
+        assertTrue(prompt.contains(medicalCase.auxiliaryExams))
+        assertTrue(prompt.contains("不得补充病例中未提供的检查项目"))
     }
 
     @Test
@@ -140,5 +144,11 @@ class PromptBuilderTest {
         )
         assertTrue(elderly.contains("年龄必须大于等于60岁"))
         assertTrue(elderly.contains(EncounterType.INPATIENT.label))
+        assertTrue(inpatient.contains("treatmentPlan 必须逐行包含"))
+        assertTrue(inpatient.contains("治疗原则："))
+        assertTrue(inpatient.contains("药物："))
+        assertTrue(inpatient.contains("处理："))
+        assertTrue(inpatient.contains("随访："))
+        assertTrue(inpatient.contains("不得加入病例资料无法支持的检查"))
     }
 }

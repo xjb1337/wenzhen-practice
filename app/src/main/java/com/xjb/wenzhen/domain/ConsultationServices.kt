@@ -177,7 +177,7 @@ class ScoreService(
         )
         val reconciled = ScoreReconciler.reconcile(parsed, medicalCase, messages, rule)
         return reconciled.copy(
-            correctDiagnosis = reconciled.correctDiagnosis.ifBlank { medicalCase.correctDiagnosis },
+            correctDiagnosis = medicalCase.correctDiagnosis,
         )
     }
 }
