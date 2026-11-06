@@ -79,6 +79,7 @@ object OfflinePracticeService {
         treatmentAnswer: String,
         encounterType: EncounterType,
     ): String = buildString {
+        appendLine("【参考病历】以下内容来自病例标准资料，不代表本次问诊采集到的信息。")
         appendLine("一般情况")
         appendLine("${medicalCase.patient.name}，${medicalCase.patient.gender}，${medicalCase.patient.age}，${medicalCase.patient.occupation}。")
         appendLine("主诉")

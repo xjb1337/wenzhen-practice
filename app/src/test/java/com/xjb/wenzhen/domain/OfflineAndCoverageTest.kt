@@ -77,6 +77,21 @@ class OfflineAndCoverageTest {
     }
 
     @Test
+    fun `离线病历首行标注内容来自病例标准资料`() {
+        val record = OfflinePracticeService.record(
+            medicalCase = medicalCase,
+            initialDiagnosis = "待查",
+            diagnosisBasis = "症状典型",
+            treatmentAnswer = "随访",
+            encounterType = EncounterType.OUTPATIENT,
+        )
+        assertEquals(
+            "【参考病历】以下内容来自病例标准资料，不代表本次问诊采集到的信息。",
+            record.lineSequence().first(),
+        )
+    }
+
+    @Test
     fun `评分校正不应把已覆盖问题再次列为遗漏`() {
         val question = medicalCase.keyQuestions.first()
         val messages = listOf(doctor(question))
