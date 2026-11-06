@@ -1,7 +1,6 @@
 package com.xjb.wenzhen.ui
 
 import android.content.Context
-import android.content.Context
 import android.content.SharedPreferences
 import android.database.sqlite.SQLiteException
 import androidx.lifecycle.ViewModelStore
@@ -19,7 +18,9 @@ import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
 import com.xjb.wenzhen.data.db.ConsultationDao
+import com.xjb.wenzhen.data.db.ConsultationDraftDao
 import com.xjb.wenzhen.data.db.ConsultationDraftEntity
+import com.xjb.wenzhen.data.db.ConsultationDraftRepository
 import com.xjb.wenzhen.data.db.ConsultationEntity
 import com.xjb.wenzhen.data.db.ConsultationRepository
 import com.xjb.wenzhen.data.db.ConversationJsonCodec
@@ -42,6 +43,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
@@ -57,6 +59,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -129,6 +132,7 @@ class AppViewModelTest {
         settingsRepository: SettingsRepository = this.settingsRepository,
         inviteRedeemer: InviteRedeemer? = null,
         consultationRepository: ConsultationRepository? = null,
+        consultationDraftRepository: ConsultationDraftRepository? = null,
     ): AppContainer = AppContainer(
         context,
         overrideLlmClient = client,
@@ -136,6 +140,7 @@ class AppViewModelTest {
         overrideSettingsRepository = settingsRepository,
         overrideInviteRedeemer = inviteRedeemer,
         overrideConsultationRepository = consultationRepository,
+        overrideConsultationDraftRepository = consultationDraftRepository,
     )
 
     private fun viewModel(
@@ -144,7 +149,8 @@ class AppViewModelTest {
         settingsRepository: SettingsRepository = this.settingsRepository,
         inviteRedeemer: InviteRedeemer? = null,
         consultationRepository: ConsultationRepository? = null,
-        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer, consultationRepository),
+        consultationDraftRepository: ConsultationDraftRepository? = null,
+        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer, consultationRepository, consultationDraftRepository),
     ): AppViewModel {
         val medicalCase = BuiltInCases.all.first()
         val initial = AppUiState(
@@ -578,6 +584,48 @@ class AppViewModelTest {
         waitUntil { events.any { it is AppEvent.ShowMessage } }
 
         assertTrue("events=$events", events.any { it is AppEvent.ShowMessage })
+    }
+
+    @Test
+    fun `放弃草稿时在途草稿保存不会把草稿写回`() = runTest(dispatcher) {
+        val draftDao = object : ConsultationDraftDao {
+            val saveRelease = CompletableDeferred<Unit>()
+            var saveStarted = false
+            var deleteCalled = false
+            var stored: ConsultationDraftEntity? = null
+
+            override suspend fun get(): ConsultationDraftEntity? = stored
+
+            override suspend fun upsert(draft: ConsultationDraftEntity) {
+                saveStarted = true
+                // 模拟 Room 正在落盘：即使调用方取消，底层写入也先完成。
+                withContext(NonCancellable) {
+                    saveRelease.await()
+                    stored = draft
+                }
+            }
+
+            override suspend fun delete() {
+                stored = null
+                deleteCalled = true
+            }
+        }
+        val vm = viewModel(
+            SuccessClient(),
+            consultationDraftRepository = ConsultationDraftRepository(draftDao),
+        )
+
+        vm.flushDraft()
+        advanceUntilIdle()
+        assertTrue("草稿保存应已开始", draftDao.saveStarted)
+
+        vm.discardDraft()
+        advanceUntilIdle()
+        draftDao.saveRelease.complete(Unit)
+        waitUntil { draftDao.deleteCalled }
+
+        assertNull("放弃草稿后界面不能出现旧草稿", vm.uiState.value.draft)
+        assertNull("放弃草稿后仓库必须为空", draftDao.stored)
     }
 
     @Test

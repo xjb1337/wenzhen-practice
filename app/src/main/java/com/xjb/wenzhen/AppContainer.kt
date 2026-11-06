@@ -27,11 +27,13 @@ class AppContainer(
     overrideSettingsRepository: SettingsRepository? = null,
     overrideInviteRedeemer: InviteRedeemer? = null,
     overrideConsultationRepository: ConsultationRepository? = null,
+    overrideConsultationDraftRepository: ConsultationDraftRepository? = null,
 ) {
     private val appContext = context.applicationContext
     private val database = overrideDatabase ?: AppDatabase.get(context)
     val consultationRepository = overrideConsultationRepository ?: ConsultationRepository(database.consultationDao())
-    val consultationDraftRepository = ConsultationDraftRepository(database.consultationDraftDao())
+    val consultationDraftRepository =
+        overrideConsultationDraftRepository ?: ConsultationDraftRepository(database.consultationDraftDao())
     val savedCaseRepository = SavedCaseRepository(database.savedCaseDao())
     val settingsRepository = overrideSettingsRepository ?: SettingsRepository(context)
     private val baseLlmClient: LlmClient = overrideLlmClient ?: DeepSeekClient()

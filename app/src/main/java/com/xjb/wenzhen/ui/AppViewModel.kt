@@ -47,6 +47,8 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.util.UUID
 
 class AppViewModel(
@@ -70,6 +72,8 @@ class AppViewModel(
 
     private var historyJob: Job? = null
     private var draftSaveJob: Job? = null
+    /** 串行化草稿落库与清除，避免“保存中放弃草稿”时旧草稿在 clear 之后又写回。 */
+    private val draftMutex = Mutex()
     /**
      * 只有「进行中的问诊」才允许自动保存草稿。问诊结束并生成结果后置为 false，
      * 否则结果页退到后台时 onStop() 的 flushDraft() 会把刚结束的对话重新写回草稿，
@@ -249,7 +253,9 @@ class AppViewModel(
         draftPersistenceEnabled = false
         draftSaveJob?.cancel()
         draftSaveJob = null
-        launchDb("清除草稿失败，请稍后重试。") { container.consultationDraftRepository.clear() }
+        launchDb("清除草稿失败，请稍后重试。") {
+            draftMutex.withLock { container.consultationDraftRepository.clear() }
+        }
         _uiState.update { it.copy(draft = null) }
     }
 
@@ -857,7 +863,7 @@ class AppViewModel(
                 draftPersistenceEnabled = false
                 draftSaveJob?.cancel()
                 draftSaveJob = null
-                container.consultationDraftRepository.clear()
+                draftMutex.withLock { container.consultationDraftRepository.clear() }
                 _uiState.update { it.copy(draft = null) }
                 _events.send(AppEvent.OpenResult)
             } catch (error: Exception) {
@@ -1445,20 +1451,26 @@ class AppViewModel(
 
     private suspend fun persistDraftNow() {
         try {
-            if (!draftPersistenceEnabled) return
-            val state = _uiState.value
-            val medicalCase = state.activeCase ?: return
-            val startedAt = state.consultationStartedAt ?: return
-            val draft = ConsultationDraftEntity(
-                caseJson = CaseJsonCodec.encode(medicalCase),
-                conversationJson = ConversationJsonCodec.encode(state.messages),
-                patientPersonality = state.patientPersonality.name,
-                encounterType = state.encounterType.name,
-                startedAt = startedAt,
-                updatedAt = System.currentTimeMillis(),
-            )
-            container.consultationDraftRepository.save(draft)
-            _uiState.update { it.copy(draft = draft) }
+            draftMutex.withLock {
+                if (!draftPersistenceEnabled) return
+                val state = _uiState.value
+                val medicalCase = state.activeCase ?: return
+                val startedAt = state.consultationStartedAt ?: return
+                val draft = ConsultationDraftEntity(
+                    caseJson = CaseJsonCodec.encode(medicalCase),
+                    conversationJson = ConversationJsonCodec.encode(state.messages),
+                    patientPersonality = state.patientPersonality.name,
+                    encounterType = state.encounterType.name,
+                    startedAt = startedAt,
+                    updatedAt = System.currentTimeMillis(),
+                )
+                // 等待锁期间可能已被 discardDraft/finishConsultation 关闭草稿保存。
+                if (!draftPersistenceEnabled) return
+                container.consultationDraftRepository.save(draft)
+                // save 挂起期间可能发生放弃草稿：旧快照不能写回界面状态。
+                if (!draftPersistenceEnabled) return
+                _uiState.update { it.copy(draft = draft) }
+            }
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
         } catch (error: Exception) {
