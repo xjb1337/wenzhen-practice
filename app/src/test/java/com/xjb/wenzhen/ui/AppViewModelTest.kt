@@ -214,6 +214,28 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `测试连接返回鉴权失败时清空会话并提示重新兑换`() = runTest(dispatcher) {
+        val settings = AppSettings(
+            apiSource = ApiSource.BUILTIN,
+            deviceId = "device-1",
+            sessionToken = "old-session",
+            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
+        )
+        val vm = viewModel(AuthResultFailingClient(), settings)
+        val event = async { vm.events.first() }
+
+        vm.testConnection(ApiSource.BUILTIN, "", AppSettings.MODEL_FLASH, "", ThinkingLevel.OFF)
+        advanceUntilIdle()
+
+        assertEquals("", vm.uiState.value.settings.sessionToken)
+        assertNull(vm.uiState.value.settings.sessionExpiresAt)
+        assertEquals(
+            AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"),
+            event.await(),
+        )
+    }
+
+    @Test
     fun `失效 token 与当前会话不一致时不清除`() = runTest(dispatcher) {
         val oldSettings = AppSettings(
             apiSource = ApiSource.BUILTIN,
@@ -557,6 +579,76 @@ class AppViewModelTest {
         val draft = runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() }
         assertNotNull(draft)
         assertEquals(newCase.id, CaseJsonCodec.decode(draft!!.caseJson).id)
+    }
+
+    @Test
+    fun `结束问诊提交中开启新病例时旧提交失败会提示`() = runTest(dispatcher) {
+        val oldCase = BuiltInCases.all.first()
+        val newCase = BuiltInCases.all[1]
+        val client = BlockingClient()
+        val failingDao = object : ConsultationDao by db.consultationDao() {
+            override suspend fun insert(entity: ConsultationEntity): Long =
+                throw SQLiteException("disk I/O error")
+        }
+        val vm = viewModel(client, consultationRepository = ConsultationRepository(failingDao))
+        val events = mutableListOf<AppEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(dispatcher.scheduler)) { vm.events.collect { events += it } }
+
+        vm.finishConsultation(
+            initialDiagnosis = oldCase.correctDiagnosis,
+            diagnosisBasis = oldCase.auxiliaryExams,
+            generateRecord = false,
+        )
+        advanceUntilIdle()
+        assertTrue("评分应处于阻塞中", vm.uiState.value.isFinishing)
+
+        vm.openCase(newCase)
+        advanceUntilIdle()
+        assertEquals(newCase.id, vm.uiState.value.activeCase?.id)
+
+        client.releaseScore()
+        waitUntil {
+            events.any {
+                it is AppEvent.ShowMessage &&
+                    it.message == "上一次问诊「${oldCase.title}」保存失败，请稍后重试。"
+            }
+        }
+
+        assertEquals(newCase.id, vm.uiState.value.activeCase?.id)
+        assertNull(vm.uiState.value.currentResult)
+        assertTrue("旧问诊不能打开结果页", events.none { it is AppEvent.OpenResult })
+        val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
+        assertTrue("写库失败不应留下记录", records.isEmpty())
+    }
+
+    @Test
+    fun `恢复历史成功时只提示实际恢复条数`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val record = ConsultationEntity(
+            caseTitle = medicalCase.title,
+            department = medicalCase.department,
+            difficulty = medicalCase.difficulty.label,
+            patientName = medicalCase.patient.name,
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(emptyList()),
+            medicalRecord = "",
+            scoreJson = "",
+            totalScore = 0,
+            initialDiagnosis = medicalCase.correctDiagnosis,
+            diagnosisBasis = medicalCase.auxiliaryExams,
+            createdAt = 10_000L,
+        )
+        val vm = viewModel(SuccessClient())
+        val events = mutableListOf<AppEvent>()
+        backgroundScope.launch(UnconfinedTestDispatcher(dispatcher.scheduler)) { vm.events.collect { events += it } }
+
+        vm.restoreHistory(listOf(record, record.copy(id = 0L)))
+        waitUntil { events.any { it is AppEvent.ShowMessage } }
+
+        assertEquals(
+            listOf(AppEvent.ShowMessage("已恢复 1 条")),
+            events.filterIsInstance<AppEvent.ShowMessage>(),
+        )
     }
 
     @Test
@@ -1095,6 +1187,18 @@ class AppViewModelTest {
 
         override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
             throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
+    }
+
+    private class AuthResultFailingClient : LlmClient {
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String = throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
+
+        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+            ConnectionTestResult.Failure("会话已失效，请重新兑换邀请码。", LlmErrorKind.AUTH)
     }
 
     private class FakeInviteRedeemer(
