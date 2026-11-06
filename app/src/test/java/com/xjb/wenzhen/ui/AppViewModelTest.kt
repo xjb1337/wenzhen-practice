@@ -2,6 +2,7 @@ package com.xjb.wenzhen.ui
 
 import android.content.Context
 import androidx.lifecycle.ViewModelStore
+import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.xjb.wenzhen.AppContainer
@@ -23,15 +24,21 @@ import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.job
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -40,6 +47,10 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -47,28 +58,43 @@ import org.robolectric.annotation.Config
 class AppViewModelTest {
     private val dispatcher = StandardTestDispatcher()
     private val store = ViewModelStore()
+    private val viewModelJobs = mutableListOf<Job>()
     private lateinit var context: Context
     private lateinit var db: AppDatabase
+    private lateinit var roomExecutor: ExecutorService
 
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         context = ApplicationProvider.getApplicationContext()
+        roomExecutor = Executors.newSingleThreadExecutor()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
+            .setQueryExecutor(roomExecutor)
+            .setTransactionExecutor(roomExecutor)
             .build()
     }
 
     @After
     fun tearDown() {
-        // P0-6：内存数据库不在这里 close()。Room 2.6.1 的 InvalidationTracker 在 ViewModel 的
-        // Flow 查询尚未完全取消时执行 close()，会与 arch_disk_io 查询线程发生锁反转死锁
-        // （jstack: Found one Java-level deadlock；arch_disk_io 等 ReadLock，
-        // DefaultDispatcher-worker 在 ProcessLock.lock 等 close）。测试进程结束会释放全部
-        // 内存数据库连接，因此只清理 ViewModelStore 和测试调度器即可。
-        store.clear()
-        dispatcher.scheduler.advanceUntilIdle()
+        // advanceUntilIdle 只排空测试调度器，不能等待 Room 后台的查询和 Flow finally。
+        // 先等整个 ViewModel 生命周期结束，再排空 Room 的独立查询/失效通知任务；
+        // 此后 close 不会与观察者清理发生锁反转，resetMain 也不会与 IO 回调并发。
+        runTest(dispatcher) { clearViewModels() }
+        roomExecutor.shutdown()
+        assertTrue("Room 后台任务未结束", roomExecutor.awaitTermination(10, TimeUnit.SECONDS))
+        db.close()
         Dispatchers.resetMain()
+    }
+
+    private fun storeViewModel(key: String, vm: AppViewModel) {
+        viewModelJobs += vm.viewModelScope.coroutineContext.job
+        store.put(key, vm)
+    }
+
+    private suspend fun clearViewModels() {
+        store.clear()
+        viewModelJobs.joinAll()
     }
 
     private fun viewModel(client: LlmClient, settings: AppSettings = apiSettings()): AppViewModel {
@@ -90,7 +116,7 @@ class AppViewModelTest {
             ),
         )
         return AppViewModel(container, initial).also {
-            store.put("vm-${System.nanoTime()}", it)
+            storeViewModel("vm-${System.nanoTime()}", it)
         }
     }
 
@@ -144,6 +170,40 @@ class AppViewModelTest {
         assertEquals(MessageRole.PATIENT, messages.last().role)
         assertNotNull(vm.uiState.value.lastReplyMillis)
         assertNotNull(vm.uiState.value.lastReplyTokens)
+    }
+
+    @Test
+    fun `关闭时等待Room观察清理并取消挂起的草稿刷新`() = runTest(dispatcher) {
+        val queryStarted = CountDownLatch(1)
+        val releaseQuery = CountDownLatch(1)
+        roomExecutor.execute {
+            queryStarted.countDown()
+            check(releaseQuery.await(10, TimeUnit.SECONDS))
+        }
+        assertTrue(queryStarted.await(10, TimeUnit.SECONDS))
+        val vm = viewModel(SuccessClient())
+        val lifecycleJob = vm.viewModelScope.coroutineContext.job
+        try {
+            // 启动真正的 Room Flow 和草稿写入，但暂不让后台执行取消/回调。
+            vm.flushDraft()
+            runCurrent()
+            val clearing = async { clearViewModels() }
+            runCurrent()
+
+            assertTrue(lifecycleJob.isCancelled)
+            assertFalse("Room 观察尚未清理，不能宣告关闭完成", clearing.isCompleted)
+            releaseQuery.countDown()
+            clearing.await()
+            assertTrue(lifecycleJob.isCompleted)
+
+            // 模拟迟到的 onStop；关闭后不能再写回草稿。
+            vm.flushDraft()
+            advanceUntilIdle()
+            assertNull(vm.uiState.value.draft)
+            assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+        } finally {
+            releaseQuery.countDown()
+        }
     }
 
     @Test
@@ -210,7 +270,7 @@ class AppViewModelTest {
         )
         val container = AppContainer(context, overrideLlmClient = SuccessClient(), overrideDatabase = db)
         val vm = AppViewModel(container, AppUiState(settings = apiSettings(), draft = draft))
-        store.put("vm-draft", vm)
+        storeViewModel("vm-draft", vm)
 
         vm.resumeDraft()
 
@@ -257,7 +317,7 @@ class AppViewModelTest {
                 draft = draft,
             ),
         )
-        store.put("vm-finish-draft", vm)
+        storeViewModel("vm-finish-draft", vm)
 
         // 病历生成成功、评分生成失败：结果页会展示病历，但本次问诊已经结束。
         vm.finishConsultation(
@@ -266,6 +326,10 @@ class AppViewModelTest {
             generateRecord = true,
         )
         advanceUntilIdle()
+        waitUntil {
+            vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null
+        }
+        assertNull(vm.uiState.value.finishError)
         waitUntil { vm.uiState.value.draft == null }
 
         val result = vm.uiState.value.currentResult
@@ -400,7 +464,7 @@ class AppViewModelTest {
             container,
             AppUiState(settings = apiSettings(), draft = draft),
         )
-        store.put("vm-stale-draft", vm)
+        storeViewModel("vm-stale-draft", vm)
 
         advanceUntilIdle()
         waitUntil { vm.uiState.value.draft == null }

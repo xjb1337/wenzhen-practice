@@ -86,6 +86,14 @@ class AppViewModel(
         observeSavedCases()
     }
 
+    override fun onCleared() {
+        // viewModelScope 会取消状态观察和请求；关闭后也不再接受迟到的草稿刷新。
+        draftPersistenceEnabled = false
+        draftSaveJob?.cancel()
+        draftSaveJob = null
+        super.onCleared()
+    }
+
     fun selectDepartment(department: String) {
         _uiState.update { it.copy(selectedDepartment = department) }
     }
@@ -1242,6 +1250,9 @@ class AppViewModel(
                 container.consultationDraftRepository.clear()
                 _uiState.update { it.copy(draft = null) }
             } else {
+                // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
+                // 再把读取到的旧草稿快照写回状态，否则首页会误报存在未完成问诊。
+                if (!draftPersistenceEnabled) return@launch
                 _uiState.update { it.copy(draft = draft) }
             }
         }
