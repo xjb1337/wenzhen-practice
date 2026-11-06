@@ -26,6 +26,8 @@ data class AppSettings(
     val apiSource: ApiSource = ApiSource.OWN_KEY,
     val deviceId: String = "",
     val sessionToken: String = "",
+    /** 内置服务会话过期时间（epoch 毫秒）；null 表示不限制。 */
+    val sessionExpiresAt: Long? = null,
     /** 仅供测试注入，不持久化；生产环境始终使用 [RELAY_BASE_URL]。 */
     val relayBaseUrl: String = RELAY_BASE_URL,
     /** 首启隐私与 AI 使用告知是否已确认。 */
@@ -35,11 +37,14 @@ data class AppSettings(
     val hasApiKey: Boolean
         get() = when (apiSource) {
             ApiSource.OWN_KEY -> apiKey.isNotBlank()
-            ApiSource.BUILTIN -> sessionToken.isNotBlank()
+            ApiSource.BUILTIN -> sessionToken.isNotBlank() && !isSessionExpired()
         }
 
     val inviteRedeemed: Boolean
-        get() = sessionToken.isNotBlank()
+        get() = sessionToken.isNotBlank() && !isSessionExpired()
+
+    fun isSessionExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
+        sessionExpiresAt?.let { it <= nowMillis } ?: false
 
     val aiSetupMessage: String
         get() = when (apiSource) {

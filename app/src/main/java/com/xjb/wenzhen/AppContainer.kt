@@ -3,7 +3,9 @@ package com.xjb.wenzhen
 import android.content.Context
 import com.xjb.wenzhen.BuildConfig
 import com.xjb.wenzhen.data.api.DeepSeekClient
+import com.xjb.wenzhen.data.api.InviteRedeemer
 import com.xjb.wenzhen.data.api.LlmClient
+import com.xjb.wenzhen.data.api.RelayAuthWatchingClient
 import com.xjb.wenzhen.data.api.RelayClient
 import com.xjb.wenzhen.data.db.AppDatabase
 import com.xjb.wenzhen.data.db.ConsultationRepository
@@ -22,15 +24,19 @@ class AppContainer(
     context: Context,
     overrideLlmClient: LlmClient? = null,
     overrideDatabase: AppDatabase? = null,
+    overrideSettingsRepository: SettingsRepository? = null,
+    overrideInviteRedeemer: InviteRedeemer? = null,
 ) {
     private val appContext = context.applicationContext
     private val database = overrideDatabase ?: AppDatabase.get(context)
     val consultationRepository = ConsultationRepository(database.consultationDao())
     val consultationDraftRepository = ConsultationDraftRepository(database.consultationDraftDao())
     val savedCaseRepository = SavedCaseRepository(database.savedCaseDao())
-    val settingsRepository = SettingsRepository(context)
-    val llmClient: LlmClient = overrideLlmClient ?: DeepSeekClient()
-    val relayClient = RelayClient()
+    val settingsRepository = overrideSettingsRepository ?: SettingsRepository(context)
+    private val baseLlmClient: LlmClient = overrideLlmClient ?: DeepSeekClient()
+    val relayAuthWatchingClient = RelayAuthWatchingClient(baseLlmClient)
+    val llmClient: LlmClient = relayAuthWatchingClient
+    val relayClient: InviteRedeemer = overrideInviteRedeemer ?: RelayClient()
     val updateChecker = UpdateChecker(appContext)
     val currentVersionName: String
     val currentVersionCode: Int

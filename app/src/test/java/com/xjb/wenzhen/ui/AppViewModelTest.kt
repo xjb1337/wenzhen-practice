@@ -1,14 +1,18 @@
 package com.xjb.wenzhen.ui
 
 import android.content.Context
+import android.content.SharedPreferences
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
+import com.xjb.wenzhen.data.api.InviteRedeemer
 import com.xjb.wenzhen.data.api.LlmClient
+import com.xjb.wenzhen.data.api.LlmErrorKind
 import com.xjb.wenzhen.data.api.LlmException
+import com.xjb.wenzhen.data.api.RedeemResult
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
@@ -20,7 +24,10 @@ import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.ThinkingLevel
+import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.data.settings.SettingsRepository
 import com.xjb.wenzhen.domain.AiCommentStatus
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
@@ -66,11 +73,16 @@ class AppViewModelTest {
     private lateinit var context: Context
     private lateinit var db: AppDatabase
     private lateinit var roomExecutor: ExecutorService
+    private lateinit var settingsPrefs: SharedPreferences
+    private lateinit var settingsRepository: SettingsRepository
 
     @Before
     fun setUp() {
         Dispatchers.setMain(dispatcher)
         context = ApplicationProvider.getApplicationContext()
+        settingsPrefs = context.getSharedPreferences("app-viewmodel-test-settings", Context.MODE_PRIVATE)
+        settingsPrefs.edit().clear().commit()
+        settingsRepository = SettingsRepository(context, settingsPrefs)
         roomExecutor = Executors.newSingleThreadExecutor()
         db = Room.inMemoryDatabaseBuilder(context, AppDatabase::class.java)
             .allowMainThreadQueries()
@@ -101,8 +113,25 @@ class AppViewModelTest {
         viewModelJobs.joinAll()
     }
 
-    private fun viewModel(client: LlmClient, settings: AppSettings = apiSettings()): AppViewModel {
-        val container = AppContainer(context, overrideLlmClient = client, overrideDatabase = db)
+    private fun appContainer(
+        client: LlmClient,
+        settingsRepository: SettingsRepository = this.settingsRepository,
+        inviteRedeemer: InviteRedeemer? = null,
+    ): AppContainer = AppContainer(
+        context,
+        overrideLlmClient = client,
+        overrideDatabase = db,
+        overrideSettingsRepository = settingsRepository,
+        overrideInviteRedeemer = inviteRedeemer,
+    )
+
+    private fun viewModel(
+        client: LlmClient,
+        settings: AppSettings = apiSettings(),
+        settingsRepository: SettingsRepository = this.settingsRepository,
+        inviteRedeemer: InviteRedeemer? = null,
+        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer),
+    ): AppViewModel {
         val medicalCase = BuiltInCases.all.first()
         val initial = AppUiState(
             settings = settings,
@@ -140,6 +169,57 @@ class AppViewModelTest {
         val error = vm.uiState.value.settingsSaveError
         assertNotNull(error)
         assertTrue(error.orEmpty().contains("HTTPS"))
+    }
+
+    @Test
+    fun `内置服务鉴权失败会清空会话并提示重新兑换`() = runTest(dispatcher) {
+        val settings = AppSettings(
+            apiSource = ApiSource.BUILTIN,
+            deviceId = "device-1",
+            sessionToken = "old-session",
+            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
+        )
+        val vm = viewModel(AuthFailingClient(), settings)
+        val event = async { vm.events.first() }
+
+        vm.testConnection(ApiSource.BUILTIN, "", AppSettings.MODEL_FLASH, "", ThinkingLevel.OFF)
+        advanceUntilIdle()
+
+        assertEquals("", vm.uiState.value.settings.sessionToken)
+        assertNull(vm.uiState.value.settings.sessionExpiresAt)
+        assertEquals(
+            AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"),
+            event.await(),
+        )
+    }
+
+    @Test
+    fun `失效 token 与当前会话不一致时不清除`() = runTest(dispatcher) {
+        val oldSettings = AppSettings(
+            apiSource = ApiSource.BUILTIN,
+            deviceId = "device-1",
+            sessionToken = "old-session",
+            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
+        )
+        val container = appContainer(
+            client = AuthFailingClient(),
+            inviteRedeemer = FakeInviteRedeemer(RedeemResult.Success("new-session")),
+        )
+        val vm = viewModel(AuthFailingClient(), oldSettings, container = container)
+
+        vm.redeemInvite("WZ-TEST")
+        advanceUntilIdle()
+        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
+
+        val staleConfig = AppSettings(
+            apiSource = ApiSource.BUILTIN,
+            deviceId = "device-1",
+            sessionToken = "old-session",
+        ).toLlmConfig()
+        runCatching { container.llmClient.testConnection(staleConfig) }
+        advanceUntilIdle()
+
+        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
     }
 
     @Test
@@ -809,6 +889,25 @@ class AppViewModelTest {
             temperature: Double,
             onDelta: suspend (String) -> Unit,
         ): String = awaitCancellation()
+    }
+
+    private class AuthFailingClient : LlmClient {
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String = throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
+
+        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+            throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
+    }
+
+    private class FakeInviteRedeemer(
+        private val result: RedeemResult,
+    ) : InviteRedeemer {
+        override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
+            result
     }
 
     private companion object {

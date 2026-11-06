@@ -3,6 +3,7 @@ package com.xjb.wenzhen.data.settings
 import android.content.Context
 import android.content.SharedPreferences
 import androidx.test.core.app.ApplicationProvider
+import com.xjb.wenzhen.data.model.ThinkingLevel
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -77,6 +78,45 @@ class SettingsRepositoryTest {
         assertFalse(AppSettings(apiKey = "sk-own-key", sessionToken = "session-token").let {
             it.copy(apiSource = ApiSource.OWN_KEY, apiKey = "")
         }.hasApiKey)
+    }
+
+    @Test
+    fun `内置服务会话按过期时间判断可用性`() {
+        val now = System.currentTimeMillis()
+        val active = AppSettings(
+            apiSource = ApiSource.BUILTIN,
+            sessionToken = "session-token",
+            sessionExpiresAt = now + 60_000L,
+        )
+        assertTrue(active.hasApiKey)
+        assertTrue(active.inviteRedeemed)
+        assertFalse(active.isSessionExpired(now))
+
+        val expired = active.copy(sessionExpiresAt = now - 1L)
+        assertFalse(expired.hasApiKey)
+        assertFalse(expired.inviteRedeemed)
+        assertTrue(expired.isSessionExpired(now))
+
+        val noExpiry = active.copy(sessionExpiresAt = null)
+        assertTrue(noExpiry.hasApiKey)
+        assertTrue(noExpiry.inviteRedeemed)
+        assertFalse(noExpiry.isSessionExpired(now))
+    }
+
+    @Test
+    fun `sessionExpiresAt 往返保存且为空时移除`() {
+        val expiresAt = 1_800_000_000_000L
+        repository.save(
+            AppSettings(
+                sessionToken = "session-token",
+                sessionExpiresAt = expiresAt,
+            ),
+        )
+        assertEquals(expiresAt, repository.load().sessionExpiresAt)
+
+        repository.save(AppSettings(sessionToken = "session-token", sessionExpiresAt = null))
+        assertEquals(null, repository.load().sessionExpiresAt)
+        assertFalse(prefs.contains("session_expires_at"))
     }
 
     @Test

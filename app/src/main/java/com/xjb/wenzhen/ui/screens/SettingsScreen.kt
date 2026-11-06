@@ -78,6 +78,9 @@ import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.update.InstallLaunchResult
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.xjb.wenzhen.data.update.UpdateInstaller
 import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.ui.ConnectionTestUiState
@@ -339,6 +342,13 @@ fun SettingsScreen(
                                         )
                                         Text("已兑换，可直接使用内置服务", style = MaterialTheme.typography.titleSmall)
                                     }
+                                    settings.sessionExpiresAt?.let { expiresAt ->
+                                        Text(
+                                            text = "有效期至 ${formatSessionExpiry(expiresAt)}",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
                                     TextButton(
                                         onClick = onClearRedeem,
                                         contentPadding = PaddingValues(horizontal = 2.dp),
@@ -348,6 +358,13 @@ fun SettingsScreen(
                                 }
                             }
                         } else {
+                            if (settings.sessionToken.isNotBlank() && settings.isSessionExpired()) {
+                                Text(
+                                    text = "会话已过期，请重新兑换",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.error,
+                                )
+                            }
                             OutlinedTextField(
                                 value = inviteCode,
                                 onValueChange = { inviteCode = it },
@@ -998,5 +1015,8 @@ private fun updateDialogUpdate(state: UpdateUiState): UpdateInfo? = when (state)
     is UpdateUiState.Failed -> state.update
     else -> null
 }
+
+private fun formatSessionExpiry(epochMillis: Long): String =
+    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
 private const val DEEPSEEK_PLATFORM_URL = "https://platform.deepseek.com"

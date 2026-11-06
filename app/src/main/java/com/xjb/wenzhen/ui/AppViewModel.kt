@@ -89,6 +89,29 @@ class AppViewModel(
         observeHistory()
         observeDraft()
         observeSavedCases()
+        observeRelayAuthInvalidation()
+    }
+
+    private fun observeRelayAuthInvalidation() {
+        viewModelScope.launch {
+            container.relayAuthWatchingClient.invalidated.collect { invalidatedToken ->
+                val currentSettings = _uiState.value.settings
+                if (invalidatedToken != currentSettings.sessionToken) return@collect
+                val updated = currentSettings.copy(sessionToken = "", sessionExpiresAt = null)
+                runCatching { container.settingsRepository.save(updated) }
+                    .onSuccess {
+                        _uiState.update { it.copy(settings = updated) }
+                        _events.send(AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"))
+                    }
+                    .onFailure { error ->
+                        _uiState.update {
+                            it.copy(
+                                settingsSaveError = friendlyMessage(error, "设置保存失败，请稍后重试。"),
+                            )
+                        }
+                    }
+            }
+        }
     }
 
     override fun onCleared() {
@@ -979,6 +1002,7 @@ class AppViewModel(
                         apiSource = ApiSource.BUILTIN,
                         deviceId = deviceId,
                         sessionToken = result.sessionToken,
+                        sessionExpiresAt = result.expiresAt,
                         relayBaseUrl = currentSettings.relayBaseUrl.trim()
                             .ifBlank { AppSettings.RELAY_BASE_URL },
                     )
@@ -1017,7 +1041,7 @@ class AppViewModel(
 
     fun clearInviteRedemption() {
         val currentSettings = _uiState.value.settings
-        val updated = currentSettings.copy(sessionToken = "")
+        val updated = currentSettings.copy(sessionToken = "", sessionExpiresAt = null)
         try {
             container.settingsRepository.save(updated)
             _uiState.update {

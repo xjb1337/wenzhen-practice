@@ -11,6 +11,12 @@ import org.json.JSONObject
 import java.io.InterruptedIOException
 import java.net.SocketTimeoutException
 
+/**
+ * Worker 的 expiresAt 可能返回秒或毫秒时间戳；小于 1000 亿的值按秒归一化为毫秒。
+ */
+internal fun normalizeEpochMillis(raw: Long): Long =
+    if (raw < 100_000_000_000L) raw * 1000L else raw
+
 internal object RelayEndpoints {
     fun chatCompletions(baseUrl: String, enforceHttps: Boolean): String {
         val base = normalize(baseUrl, enforceHttps)
@@ -101,11 +107,15 @@ internal sealed interface RelayHealthResult {
     data class Failure(val message: String) : RelayHealthResult
 }
 
+interface InviteRedeemer {
+    suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult
+}
+
 class RelayClient(
     private val httpClient: OkHttpClient = DeepSeekClient.defaultHttpClient(),
     private val enforceHttps: Boolean = true,
-) {
-    suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
+) : InviteRedeemer {
+    override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
         withContext(Dispatchers.IO) {
             val endpoint = try {
                 RelayEndpoints.redeem(baseUrl, enforceHttps)
@@ -135,7 +145,7 @@ class RelayClient(
                         return@withContext RedeemResult.Failure("兑换响应格式异常，请稍后重试。")
                     }
                     val expiresAt = if (json != null && json.has("expiresAt") && !json.isNull("expiresAt")) {
-                        json.optLong("expiresAt").takeIf { it > 0 }
+                        json.optLong("expiresAt").takeIf { it > 0 }?.let(::normalizeEpochMillis)
                     } else {
                         null
                     }

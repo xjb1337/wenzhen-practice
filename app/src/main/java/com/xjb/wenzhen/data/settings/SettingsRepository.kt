@@ -66,6 +66,7 @@ class SettingsRepository(
                 apiSource = ApiSource.from(prefs.getString(KEY_API_SOURCE, null)),
                 deviceId = prefs.getString(KEY_DEVICE_ID, "").orEmpty().ifBlank { stableDeviceId },
                 sessionToken = prefs.getString(KEY_SESSION_TOKEN, "").orEmpty(),
+                sessionExpiresAt = prefs.getLong(KEY_SESSION_EXPIRES_AT, 0L).takeIf { it > 0L },
                 relayBaseUrl = AppSettings.RELAY_BASE_URL,
                 privacyAccepted = prefs.getBoolean(KEY_PRIVACY_ACCEPTED, false),
             )
@@ -98,6 +99,11 @@ class SettingsRepository(
             .putString(KEY_API_SOURCE, settings.apiSource.name)
             .putString(KEY_DEVICE_ID, deviceId)
             .putString(KEY_SESSION_TOKEN, settings.sessionToken.trim())
+            .apply {
+                val expiresAt = settings.sessionExpiresAt
+                if (expiresAt != null) putLong(KEY_SESSION_EXPIRES_AT, expiresAt)
+                else remove(KEY_SESSION_EXPIRES_AT)
+            }
             .remove(KEY_RELAY_BASE_URL)
             .putBoolean(KEY_PRIVACY_ACCEPTED, settings.privacyAccepted)
             .commit()
@@ -129,6 +135,7 @@ class SettingsRepository(
         private const val KEY_API_SOURCE = "api_source"
         private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_SESSION_TOKEN = "session_token"
+        private const val KEY_SESSION_EXPIRES_AT = "session_expires_at"
         private const val KEY_RELAY_BASE_URL = "relay_base_url"
         private const val KEY_PRIVACY_ACCEPTED = "privacy_accepted"
     }

@@ -41,12 +41,22 @@ class RelayApiTest {
         assertTrue(result is RedeemResult.Success)
         result as RedeemResult.Success
         assertEquals("session-abc", result.sessionToken)
-        assertEquals(123L, result.expiresAt)
+        assertEquals(123_000L, result.expiresAt)
         val request = server.takeRequest()
         assertEquals("/v1/redeem", request.path)
         val payload = JSONObject(request.body.readUtf8())
         assertEquals("WZ-TEST", payload.getString("code"))
         assertEquals("device-1", payload.getString("deviceId"))
+    }
+
+    @Test
+    fun `秒级过期时间归一化为毫秒`() {
+        assertEquals(123_000L, normalizeEpochMillis(123L))
+    }
+
+    @Test
+    fun `毫秒级过期时间保持不变`() {
+        assertEquals(1_700_000_000_000L, normalizeEpochMillis(1_700_000_000_000L))
     }
 
     @Test
