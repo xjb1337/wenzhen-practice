@@ -5,12 +5,35 @@ import com.xjb.wenzhen.BuildConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.TimeUnit
+
+/**
+ * 更新包只允许来自本仓库 GitHub Release 的固定路径。
+ * OkHttp 解析时会规范化路径中的 `..`，所以除了检查解析后的 pathSegments，
+ * 还必须检查原始字符串中是否含 `..` 或 `%2e`。
+ */
+internal fun isTrustedApkUrl(raw: String): Boolean {
+    val lower = raw.lowercase(Locale.ROOT)
+    if (".." in lower || "%2e" in lower) return false
+    val url = raw.toHttpUrlOrNull() ?: return false
+    if (url.scheme != "https" || url.host != "github.com" || url.port != 443) return false
+    if (url.username.isNotEmpty() || url.password.isNotEmpty()) return false
+    if (url.query != null || url.fragment != null) return false
+    val segments = url.pathSegments
+    return segments.size == 6 &&
+        segments[0] == "xjb1337" &&
+        segments[1] == "wenzhen-practice" &&
+        segments[2] == "releases" &&
+        segments[3] == "download" &&
+        Regex("^v\\d+\\.\\d+\\.\\d+$").matches(segments[4]) &&
+        segments[5] == "wenzhen-practice.apk"
+}
 
 sealed interface UpdateCheckResult {
     data class Available(val update: UpdateInfo) : UpdateCheckResult
@@ -48,7 +71,7 @@ class UpdateChecker(
             throw UpdateParseException("网络错误，暂时无法检查更新，请检查网络后重试。", error)
         }
         val update = UpdateInfo.parse(raw)
-        if (!update.apkUrl.startsWith(APK_URL_PREFIX)) {
+        if (!isTrustedApkUrl(update.apkUrl)) {
             throw UpdateParseException("更新 APK 来源不可信，已停止更新。")
         }
         if (update.isNewerThan(currentVersionCode, currentVersionName)) {
@@ -62,6 +85,9 @@ class UpdateChecker(
         update: UpdateInfo,
         onProgress: (Int) -> Unit,
     ): File = withContext(Dispatchers.IO) {
+        if (!isTrustedApkUrl(update.apkUrl)) {
+            throw UpdateParseException("更新 APK 来源不可信，已停止更新。")
+        }
         val directory = File(appContext.cacheDir, "updates").apply { mkdirs() }
         val target = File(directory, "wenzhen-practice-${update.versionCode}.apk")
         val partial = File(directory, "${target.name}.part")
@@ -145,8 +171,6 @@ class UpdateChecker(
     companion object {
         const val UPDATE_URL =
             "https://github.com/xjb1337/wenzhen-practice/releases/latest/download/update.json"
-        private const val APK_URL_PREFIX =
-            "https://github.com/xjb1337/wenzhen-practice/releases/download/"
         private const val MAX_APK_BYTES = 200L * 1024L * 1024L
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
