@@ -111,7 +111,6 @@ fun HistoryScreen(
                 }
             }.onSuccess { restored ->
                 onRestore(restored)
-                Toast.makeText(context, "已导入 ${restored.size} 条记录", Toast.LENGTH_SHORT).show()
             }.onFailure { error ->
                 Toast.makeText(context, "导入失败：${error.message}", Toast.LENGTH_LONG).show()
             }
