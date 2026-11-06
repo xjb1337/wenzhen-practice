@@ -125,6 +125,17 @@ class RuleScoreCalculatorTest {
     }
 
     @Test
+    fun `非字否定词只在另一诊断未否定同一部位时判冲突`() {
+        val stCore = medicalCase.copy(correctDiagnosis = "急性ST段抬高型心肌梗死")
+        assertEquals(6, nameScore("急性非ST段抬高型心肌梗死", stCore))
+        val nonStCore = medicalCase.copy(correctDiagnosis = "非ST段抬高型心肌梗死")
+        assertEquals(6, nameScore("ST段抬高型心肌梗死", nonStCore))
+        assertEquals(16, nameScore("非ST段抬高型心肌梗死", nonStCore))
+        val pneumonia = BuiltInCases.byId("resp-pneumonia")!!.copy(correctDiagnosis = "社区获得性肺炎")
+        assertEquals(14, nameScore("社区获得性肺炎非重症型", pneumonia))
+    }
+
+    @Test
     fun `需要和建议这类医嘱用词不再算共情加分`() {
         val plain = RuleScoreCalculator.compute(medicalCase, dialogue("胸口疼了多久了？", "有没有出汗或者恶心？"))
         val orders = RuleScoreCalculator.compute(

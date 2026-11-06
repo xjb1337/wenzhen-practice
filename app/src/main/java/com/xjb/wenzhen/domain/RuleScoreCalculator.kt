@@ -290,7 +290,7 @@ object RuleScoreCalculator {
         if (actual == core || actual == full || actual in aliases) return 16
         val actualCore = stripModifiers(actual)
         if (actualCore.length < MIN_DIAGNOSIS_LENGTH) return 0
-        if (('非' in actual) != ('非' in core)) return 6
+        if (negationConflict(actual, core)) return 6
         if (actual.contains(core) || aliases.any { actual.contains(it) }) return 14
         val components = toHalfWidth(medicalCase.correctDiagnosis).lowercase()
             .replace(bracketContent, "")
@@ -305,6 +305,29 @@ object RuleScoreCalculator {
             longestCommonSubstring(actualCore, target) >= 3 || commonSuffixLength(actualCore, target) >= 2
         }
         return if (partial) 8 else 6
+    }
+
+    /** 一方把「非X」限定词放在另一方没有否定的同一部位时，视为诊断方向相反。 */
+    private fun negationConflict(actual: String, core: String): Boolean =
+        negationPair(actual)?.let { pair -> containsUnnegated(core, pair) } == true ||
+            negationPair(core)?.let { pair -> containsUnnegated(actual, pair) } == true
+
+    /** 取「非」后紧跟的两个字，例如“非ST”得到“st”。 */
+    private fun negationPair(value: String): String? {
+        val index = value.indexOf('非')
+        if (index < 0 || index + 3 > value.length) return null
+        return value.substring(index + 1, index + 3)
+    }
+
+    /** 对方文本是否含有这个词，且该次出现不是紧跟在「非」之后。 */
+    private fun containsUnnegated(value: String, pair: String): Boolean {
+        var fromIndex = 0
+        while (true) {
+            val index = value.indexOf(pair, fromIndex)
+            if (index < 0) return false
+            if (index == 0 || value[index - 1] != '非') return true
+            fromIndex = index + 1
+        }
     }
 
     private fun stripModifiers(value: String): String {
