@@ -1403,7 +1403,7 @@ class AppViewModel(
                 ) {
                     // v1.3.2 及更早版本在结果页退后台时可能把已完成的问诊写回草稿；
                     // 同一病例在草稿开始之后已有完成记录，说明这是完成后的残留，启动时直接清掉。
-                    container.consultationDraftRepository.clear()
+                    draftMutex.withLock { container.consultationDraftRepository.clear() }
                     _uiState.update { it.copy(draft = null) }
                 } else {
                     // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
