@@ -292,6 +292,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         score = result.score,
                         initialDiagnosis = result.initialDiagnosis,
                         messages = result.messages,
+                        referenceCarePlan = result.referenceCarePlan,
                         notice = result.notice,
                         onBack = { navController.popBackStack() },
                     )

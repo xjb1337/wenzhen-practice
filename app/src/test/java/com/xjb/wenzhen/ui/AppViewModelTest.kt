@@ -19,6 +19,8 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.domain.ScoreParser
+import com.xjb.wenzhen.domain.ScoreResult
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
@@ -266,7 +268,9 @@ class AppViewModelTest {
         advanceUntilIdle()
         waitUntil { vm.uiState.value.draft == null }
 
-        assertNotNull(vm.uiState.value.currentResult)
+        val result = vm.uiState.value.currentResult
+        assertNotNull(result)
+        assertNotNull(result?.referenceCarePlan)
         assertNull(vm.uiState.value.draft)
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
 
@@ -276,6 +280,84 @@ class AppViewModelTest {
         waitUntil { vm.uiState.value.draft == null }
         assertNull(vm.uiState.value.draft)
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    @Test
+    fun `关闭生成病历时仍保留评分与参考诊疗方案`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val vm = viewModel(ValidScoreClient())
+
+        vm.finishConsultation(
+            initialDiagnosis = medicalCase.correctDiagnosis,
+            diagnosisBasis = medicalCase.auxiliaryExams,
+            treatmentAnswer = "阿司匹林负荷后尽快再灌注",
+            generateRecord = false,
+        )
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null }
+
+        val result = vm.uiState.value.currentResult
+        assertNotNull(result)
+        assertEquals("", result?.medicalRecord)
+        assertEquals(medicalCase.correctDiagnosis, result?.score?.correctDiagnosis)
+        assertEquals(medicalCase.correctDiagnosis, result?.referenceCarePlan?.diagnosis)
+        assertTrue(
+            result?.referenceCarePlan?.treatmentSections.orEmpty()
+                .any { it.label == "药物" && it.content.contains("阿司匹林") },
+        )
+        assertTrue(result?.referenceCarePlan?.precautions.orEmpty().any { it.contains("随访") })
+    }
+
+    @Test
+    fun `历史详情会从保存病例重建住院参考诊疗方案`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val score = ScoreResult(
+            totalScore = 80,
+            coverageScore = 30,
+            techniqueScore = 12,
+            communicationScore = 12,
+            diagnosisScore = 16,
+            treatmentScore = 10,
+            coveredPoints = emptyList(),
+            missedQuestions = emptyList(),
+            strengths = emptyList(),
+            improvements = emptyList(),
+            correctDiagnosis = medicalCase.correctDiagnosis,
+            diagnosisExplanation = "依据病例资料可支持诊断。",
+        )
+        val recordId = runBlocking(Dispatchers.IO) {
+            db.consultationDao().insert(
+                ConsultationEntity(
+                    caseTitle = medicalCase.title,
+                    department = medicalCase.department,
+                    difficulty = medicalCase.difficulty.label,
+                    patientName = medicalCase.patient.name,
+                    caseJson = CaseJsonCodec.encode(medicalCase),
+                    conversationJson = ConversationJsonCodec.encode(emptyList()),
+                    medicalRecord = "",
+                    scoreJson = ScoreParser.encode(score),
+                    totalScore = score.totalScore,
+                    initialDiagnosis = medicalCase.correctDiagnosis,
+                    diagnosisBasis = medicalCase.auxiliaryExams,
+                    createdAt = 1_000L,
+                    encounterType = "INPATIENT",
+                ),
+            )
+        }
+        val vm = viewModel(SuccessClient())
+
+        vm.loadHistoryDetail(recordId)
+        waitUntil { vm.uiState.value.historyDetail != null || vm.uiState.value.historyDetailError != null }
+
+        val detail = vm.uiState.value.historyDetail
+        assertNotNull(detail)
+        assertNull(vm.uiState.value.historyDetailError)
+        assertEquals("住院", detail?.referenceCarePlan?.encounterLabel)
+        assertEquals(medicalCase.correctDiagnosis, detail?.referenceCarePlan?.diagnosis)
+        assertTrue(
+            detail?.referenceCarePlan?.diagnosisBasis.orEmpty()
+                .any { it.startsWith("既往史：") },
+        )
     }
 
     @Test
@@ -353,6 +435,46 @@ class AppViewModelTest {
             onDelta(reply)
             return reply
         }
+
+        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+            ConnectionTestResult.Success
+    }
+
+    /** 生成合法评分 JSON，用于验证“不生成病历”时点评链路仍然完整。 */
+    private class ValidScoreClient : LlmClient {
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String {
+            check(jsonMode)
+            return """
+                {
+                  "totalScore": 70,
+                  "breakdown": {
+                    "questioningCoverage": 28,
+                    "techniqueAndOrder": 12,
+                    "communication": 12,
+                    "diagnosisAccuracy": 10,
+                    "treatment": 8
+                  },
+                  "coveredPoints": [],
+                  "missedQuestions": ["仍需补充危险因素"],
+                  "strengths": ["围绕主诉展开"],
+                  "improvements": ["继续完善问诊顺序"],
+                  "correctDiagnosis": "模型错误诊断",
+                  "diagnosisExplanation": "依据病例资料解释。"
+                }
+            """.trimIndent()
+        }
+
+        override suspend fun stream(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            temperature: Double,
+            onDelta: suspend (String) -> Unit,
+        ): String = error("结束问诊测试不应调用流式接口")
 
         override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
             ConnectionTestResult.Success

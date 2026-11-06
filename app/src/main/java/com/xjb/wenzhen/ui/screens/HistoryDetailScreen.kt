@@ -34,6 +34,7 @@ fun HistoryDetailScreen(
             score = record.score,
             initialDiagnosis = record.initialDiagnosis,
             messages = record.messages,
+            referenceCarePlan = record.referenceCarePlan,
             onBack = onBack,
             modifier = modifier,
         )

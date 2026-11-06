@@ -2,6 +2,7 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.api.LlmClient
 import com.xjb.wenzhen.data.cases.BuiltInCases
+import com.xjb.wenzhen.data.cases.CaseParseException
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.model.Difficulty
 import com.xjb.wenzhen.data.model.EncounterType
@@ -10,6 +11,7 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.PatientPersonality
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -53,16 +55,25 @@ class CaseGenerationServiceTest {
     }
 
     @Test
-    fun `解析 AI 病例时缺失治疗方案返回空字符串`() {
+    fun `解析 AI 病例时缺失治疗方案会被拒绝`() {
         val baseCase = BuiltInCases.byId("cardio-chest-pain")!!.copy(treatmentPlan = "")
 
-        val parsed = CaseJsonCodec.parseGenerated(
-            raw = CaseJsonCodec.encode(baseCase),
-            department = "心内科",
-            difficulty = Difficulty.MEDIUM,
-        )
+        assertThrows(CaseParseException::class.java) {
+            CaseJsonCodec.parseGenerated(
+                raw = CaseJsonCodec.encode(baseCase),
+                department = "心内科",
+                difficulty = Difficulty.MEDIUM,
+            )
+        }
+    }
 
-        assertEquals("", parsed.treatmentPlan)
+    @Test
+    fun `读取更早保存的病例时仍允许缺少治疗方案`() {
+        val baseCase = BuiltInCases.byId("cardio-chest-pain")!!.copy(treatmentPlan = "")
+
+        val decoded = CaseJsonCodec.decode(CaseJsonCodec.encode(baseCase))
+
+        assertEquals("", decoded.treatmentPlan)
     }
 
 
@@ -84,7 +95,36 @@ class CaseGenerationServiceTest {
         val user = fake.messages.first { it.role == "user" }.content
         assertTrue(system.contains(EncounterType.INPATIENT.label))
         assertTrue(system.contains("按住院场景编写"))
+        assertTrue(system.contains("治疗原则："))
+        assertTrue(system.contains("药物："))
+        assertTrue(system.contains("处理："))
+        assertTrue(system.contains("随访："))
         assertTrue(user.contains(EncounterType.INPATIENT.label))
+    }
+
+    @Test
+    fun `AI病例生成后可按住院场景重建完整参考方案`() = runTest {
+        val baseCase = BuiltInCases.byId("cardio-chest-pain")!!
+        val service = CaseGenerationService(
+            FakeLlmClient(CaseJsonCodec.encode(baseCase)),
+            PromptBuilder(),
+        )
+
+        val (generatedCase, _) = service.generate(
+            config = config(),
+            department = "心内科",
+            difficulty = Difficulty.MEDIUM,
+            encounterType = EncounterType.INPATIENT,
+        )
+        val plan = ReferenceCarePlanBuilder.build(generatedCase, EncounterType.INPATIENT)
+
+        assertTrue(generatedCase.isAiGenerated)
+        assertEquals(baseCase.correctDiagnosis, plan.diagnosis)
+        assertEquals("住院", plan.encounterLabel)
+        assertTrue(plan.diagnosisBasis.any { it.startsWith("既往史：") })
+        assertTrue(plan.necessaryExams.any { it.contains("心电图") })
+        assertTrue(plan.treatmentSections.any { it.label == "药物" && it.content.contains("阿司匹林") })
+        assertTrue(plan.precautions.any { it.contains("双联抗血小板12个月") })
     }
 
     private fun config() = LlmConfig(

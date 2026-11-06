@@ -243,7 +243,7 @@ fun FinishConsultationScreen(
                 Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text("生成病历", style = MaterialTheme.typography.titleMedium)
-                        Text("关闭时只评分并反馈", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text("关闭时不生成病历，仍评分并给出参考诊疗方案", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Switch(checked = generateRecord, onCheckedChange = { generateRecord = it })
                 }
@@ -291,7 +291,7 @@ fun FinishConsultationScreen(
                         )
                         Column {
                             Text(
-                                text = "正在生成大病历与点评…",
+                                text = if (generateRecord) "正在生成病历与点评…" else "正在生成点评与参考诊疗方案…",
                                 style = MaterialTheme.typography.titleSmall,
                             )
                             Text(

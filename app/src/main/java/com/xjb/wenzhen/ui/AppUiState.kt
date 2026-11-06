@@ -16,6 +16,7 @@ import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.StatsCalculator
 import com.xjb.wenzhen.domain.StatsRecord
 import com.xjb.wenzhen.domain.StatsSummary
+import com.xjb.wenzhen.domain.ReferenceCarePlan
 
 data class ResultViewData(
     val recordId: Long,
@@ -30,6 +31,7 @@ data class ResultViewData(
     val treatmentAnswer: String = "",
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
     val messages: List<ChatMessage> = emptyList(),
+    val referenceCarePlan: ReferenceCarePlan? = null,
     val notice: String? = null,
 )
 

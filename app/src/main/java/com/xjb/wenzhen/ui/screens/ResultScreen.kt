@@ -30,6 +30,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Lightbulb
+import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.WarningAmber
 import androidx.compose.material3.HorizontalDivider
@@ -56,6 +57,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.xjb.wenzhen.domain.CarePlanSection
+import com.xjb.wenzhen.domain.ReferenceCarePlan
 import com.xjb.wenzhen.domain.ScoreResult
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.components.formatDateTime
@@ -94,6 +97,7 @@ fun ResultScreen(
     modifier: Modifier = Modifier,
     initialTab: ResultTab = ResultTab.RECORD,
     messages: List<ChatMessage> = emptyList(),
+    referenceCarePlan: ReferenceCarePlan? = null,
     notice: String? = null,
 ) {
     val tabs = availableResultTabs(hasRecord = medicalRecord.isNotBlank(), hasTranscript = messages.isNotEmpty())
@@ -102,7 +106,7 @@ fun ResultScreen(
     val context = LocalContext.current
     val currentText = when (selectedTab) {
         ResultTab.RECORD -> medicalRecord
-        ResultTab.REVIEW -> scoreAsText(score)
+        ResultTab.REVIEW -> reviewAsText(score, referenceCarePlan)
         ResultTab.TRANSCRIPT -> transcriptAsText(messages)
     }
     val copyLabel = when (selectedTab) {
@@ -194,7 +198,11 @@ fun ResultScreen(
                 }
             }
             if (tabs.size == 1) {
-                ReviewTab(score = score, modifier = Modifier.weight(1f))
+                ReviewTab(
+                    score = score,
+                    referenceCarePlan = referenceCarePlan,
+                    modifier = Modifier.weight(1f),
+                )
                 return@Column
             }
             val selectedTabIndex = tabs.indexOf(selectedTab)
@@ -228,7 +236,11 @@ fun ResultScreen(
             }
             when (selectedTab) {
                 ResultTab.RECORD -> RecordTab(medicalRecord = medicalRecord, modifier = Modifier.weight(1f))
-                ResultTab.REVIEW -> ReviewTab(score = score, modifier = Modifier.weight(1f))
+                ResultTab.REVIEW -> ReviewTab(
+                    score = score,
+                    referenceCarePlan = referenceCarePlan,
+                    modifier = Modifier.weight(1f),
+                )
                 ResultTab.TRANSCRIPT -> TranscriptTab(messages = messages, modifier = Modifier.weight(1f))
             }
         }
@@ -410,6 +422,7 @@ private fun RecordBody(medicalRecord: String) {
 @Composable
 private fun ReviewTab(
     score: ScoreResult,
+    referenceCarePlan: ReferenceCarePlan?,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -462,6 +475,19 @@ private fun ReviewTab(
                         )
                     }
                 }
+            }
+        }
+        item {
+            if (referenceCarePlan != null) {
+                ReferenceCarePlanCard(referenceCarePlan)
+            } else {
+                ReviewListSection(
+                    title = "正确诊疗方案",
+                    items = listOf("该记录缺少可用的病例原始资料，无法重建参考诊疗方案。"),
+                    accent = Warm,
+                    icon = Icons.Outlined.LocalHospital,
+                    emptyText = "暂无参考诊疗方案。",
+                )
             }
         }
         item {
@@ -607,6 +633,179 @@ private fun ScoreMetric(
 }
 
 @Composable
+private fun ReferenceCarePlanCard(
+    plan: ReferenceCarePlan,
+    modifier: Modifier = Modifier,
+) {
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, TealPrimary.copy(alpha = 0.3f)),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(38.dp)
+                        .background(TealContainer, RoundedCornerShape(12.dp)),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Outlined.LocalHospital,
+                        contentDescription = null,
+                        tint = TealPrimary,
+                        modifier = Modifier.size(21.dp),
+                    )
+                }
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("正确诊疗方案", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "依据本病例原始资料整理，供复盘对照",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Surface(
+                    shape = CircleShape,
+                    color = TealContainer,
+                ) {
+                    Text(
+                        text = plan.encounterLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TealPrimary,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                    )
+                }
+            }
+
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = "正确诊断",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = TealPrimary,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = plan.diagnosis.ifBlank { "病例未提供明确诊断。" },
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                if (plan.differentialDiagnoses.isNotEmpty()) {
+                    Text(
+                        text = "需鉴别：${plan.differentialDiagnoses.joinToString("、")}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+
+            CarePlanBulletSection(
+                title = "诊断依据",
+                items = plan.diagnosisBasis,
+                accent = TealPrimary,
+            )
+            CarePlanBulletSection(
+                title = "必要检查与结果",
+                items = plan.necessaryExams,
+                accent = Color(0xFF5E6BC7),
+            )
+
+            Text(
+                text = "治疗与用药",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary,
+                fontWeight = FontWeight.SemiBold,
+            )
+            plan.treatmentSections.forEach { section ->
+                TreatmentPlanSection(section)
+            }
+
+            CarePlanBulletSection(
+                title = "注意事项与随访",
+                items = plan.precautions,
+                accent = Warm,
+            )
+
+            Text(
+                text = "本方案不补写病例之外的信息；具体诊疗仍须结合患者实际情况并由带教老师确认。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun CarePlanBulletSection(
+    title: String,
+    items: List<String>,
+    accent: Color,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.primary,
+            fontWeight = FontWeight.SemiBold,
+        )
+        items.forEach { item ->
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(9.dp),
+                verticalAlignment = Alignment.Top,
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 7.dp)
+                        .size(6.dp)
+                        .background(accent, CircleShape),
+                )
+                Text(
+                    text = item,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TreatmentPlanSection(section: CarePlanSection) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(TealContainer.copy(alpha = 0.35f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = section.label,
+            style = MaterialTheme.typography.labelLarge,
+            color = TealPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = section.content,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+@Composable
 private fun ReviewListSection(
     title: String,
     items: List<String>,
@@ -668,7 +867,10 @@ private fun ReviewListSection(
     }
 }
 
-private fun scoreAsText(score: ScoreResult): String = buildString {
+internal fun reviewAsText(
+    score: ScoreResult,
+    referenceCarePlan: ReferenceCarePlan?,
+): String = buildString {
     appendLine("问诊点评")
     appendLine("总分：${score.totalScore}/100（${score.gradeLabel}）")
     appendLine("问诊要点覆盖：${score.coverageScore}/${score.coverageMax}")
@@ -676,6 +878,26 @@ private fun scoreAsText(score: ScoreResult): String = buildString {
     appendLine("医患沟通：${score.communicationScore}/${score.communicationMax}")
     appendLine("诊断准确：${score.diagnosisScore}/20")
     if (!score.isLegacy) appendLine("治疗方案：${score.treatmentScore}/15")
+    appendLine()
+    appendLine("正确诊疗方案${referenceCarePlan?.let { "（${it.encounterLabel}）" } ?: ""}")
+    if (referenceCarePlan != null) {
+        appendLine("正确诊断：${referenceCarePlan.diagnosis}")
+        if (referenceCarePlan.differentialDiagnoses.isNotEmpty()) {
+            appendLine("需鉴别：${referenceCarePlan.differentialDiagnoses.joinToString("、")}")
+        }
+        appendLine("诊断依据：")
+        appendLine(referenceCarePlan.diagnosisBasis.joinToString("\n") { "· $it" }.ifBlank { "· 暂无" })
+        appendLine("必要检查与结果：")
+        appendLine(referenceCarePlan.necessaryExams.joinToString("\n") { "· $it" }.ifBlank { "· 暂无" })
+        appendLine("治疗与用药：")
+        referenceCarePlan.treatmentSections.forEach { section ->
+            appendLine("· ${section.label}：${section.content}")
+        }
+        appendLine("注意事项与随访：")
+        appendLine(referenceCarePlan.precautions.joinToString("\n") { "· $it" }.ifBlank { "· 暂无" })
+    } else {
+        appendLine("该记录缺少可用的病例原始资料，无法重建参考诊疗方案。")
+    }
     appendLine()
     appendLine("已覆盖要点：")
     appendLine(score.coveredPoints.joinToString("\n") { "· $it" }.ifBlank { "暂无" })
