@@ -26,6 +26,7 @@ data class AppSettings(
     val apiSource: ApiSource = ApiSource.OWN_KEY,
     val deviceId: String = "",
     val sessionToken: String = "",
+    /** 仅供测试注入，不持久化；生产环境始终使用 [RELAY_BASE_URL]。 */
     val relayBaseUrl: String = RELAY_BASE_URL,
     /** 首启隐私与 AI 使用告知是否已确认。 */
     val privacyAccepted: Boolean = false,

@@ -1,11 +1,31 @@
 package com.xjb.wenzhen.data.settings
 
+import android.content.Context
+import android.content.SharedPreferences
+import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [33])
 class SettingsRepositoryTest {
+    private lateinit var prefs: SharedPreferences
+    private lateinit var repository: SettingsRepository
+
+    @Before
+    fun setUp() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        prefs = context.getSharedPreferences("settings-repository-test", Context.MODE_PRIVATE)
+        prefs.edit().clear().commit()
+        repository = SettingsRepository(context, prefs)
+    }
+
     @Test
     fun `API 来源名称和中文标签都能解析`() {
         assertEquals(ApiSource.BUILTIN, ApiSource.from("BUILTIN"))
@@ -76,6 +96,16 @@ class SettingsRepositoryTest {
         assertEquals("https://relay.example.com", config.baseUrl)
         assertEquals("device-123", config.deviceId)
         assertTrue(config.useRelay)
+    }
+
+    @Test
+    fun `relayBaseUrl 不读取旧持久化值且保存时清除`() {
+        prefs.edit().putString("relay_base_url", "https://old.example.com").commit()
+
+        assertEquals(AppSettings.RELAY_BASE_URL, repository.load().relayBaseUrl)
+
+        repository.save(AppSettings(apiKey = "sk-test-key", sessionToken = "session-token"))
+        assertFalse(prefs.contains("relay_base_url"))
     }
 
     @Test

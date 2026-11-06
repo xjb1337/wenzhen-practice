@@ -17,7 +17,10 @@ internal fun normalizeModel(name: String?): String {
     }
 }
 
-class SettingsRepository(context: Context) {
+class SettingsRepository(
+    context: Context,
+    private val preferencesOverride: SharedPreferences? = null,
+) {
     private val appContext = context.applicationContext
     /** 设备标识不加密保存：即使加密存储损坏或重装 Keystore，也不会让中转额度“换设备”。 */
     private val deviceIdPreferences = appContext.getSharedPreferences(
@@ -32,7 +35,7 @@ class SettingsRepository(context: Context) {
      */
     @Suppress("DEPRECATION")
     private val preferences: SharedPreferences? by lazy {
-        runCatching {
+        preferencesOverride ?: runCatching {
             val masterKey = MasterKey.Builder(appContext)
                 .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                 .build()
@@ -63,9 +66,7 @@ class SettingsRepository(context: Context) {
                 apiSource = ApiSource.from(prefs.getString(KEY_API_SOURCE, null)),
                 deviceId = prefs.getString(KEY_DEVICE_ID, "").orEmpty().ifBlank { stableDeviceId },
                 sessionToken = prefs.getString(KEY_SESSION_TOKEN, "").orEmpty(),
-                relayBaseUrl = prefs.getString(KEY_RELAY_BASE_URL, AppSettings.RELAY_BASE_URL)
-                    .orEmpty()
-                    .ifBlank { AppSettings.RELAY_BASE_URL },
+                relayBaseUrl = AppSettings.RELAY_BASE_URL,
                 privacyAccepted = prefs.getBoolean(KEY_PRIVACY_ACCEPTED, false),
             )
             if (prefs.getString(KEY_DEVICE_ID, "").orEmpty().isBlank()) {
@@ -97,10 +98,7 @@ class SettingsRepository(context: Context) {
             .putString(KEY_API_SOURCE, settings.apiSource.name)
             .putString(KEY_DEVICE_ID, deviceId)
             .putString(KEY_SESSION_TOKEN, settings.sessionToken.trim())
-            .putString(
-                KEY_RELAY_BASE_URL,
-                settings.relayBaseUrl.trim().ifBlank { AppSettings.RELAY_BASE_URL },
-            )
+            .remove(KEY_RELAY_BASE_URL)
             .putBoolean(KEY_PRIVACY_ACCEPTED, settings.privacyAccepted)
             .commit()
         if (!saved) {
