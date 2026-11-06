@@ -26,10 +26,11 @@ class AppContainer(
     overrideDatabase: AppDatabase? = null,
     overrideSettingsRepository: SettingsRepository? = null,
     overrideInviteRedeemer: InviteRedeemer? = null,
+    overrideConsultationRepository: ConsultationRepository? = null,
 ) {
     private val appContext = context.applicationContext
     private val database = overrideDatabase ?: AppDatabase.get(context)
-    val consultationRepository = ConsultationRepository(database.consultationDao())
+    val consultationRepository = overrideConsultationRepository ?: ConsultationRepository(database.consultationDao())
     val consultationDraftRepository = ConsultationDraftRepository(database.consultationDraftDao())
     val savedCaseRepository = SavedCaseRepository(database.savedCaseDao())
     val settingsRepository = overrideSettingsRepository ?: SettingsRepository(context)

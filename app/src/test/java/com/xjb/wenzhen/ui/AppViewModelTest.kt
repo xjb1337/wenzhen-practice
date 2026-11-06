@@ -1,7 +1,9 @@
 package com.xjb.wenzhen.ui
 
 import android.content.Context
+import android.content.Context
 import android.content.SharedPreferences
+import android.database.sqlite.SQLiteException
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import androidx.room.Room
@@ -16,8 +18,10 @@ import com.xjb.wenzhen.data.api.RedeemResult
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
+import com.xjb.wenzhen.data.db.ConsultationDao
 import com.xjb.wenzhen.data.db.ConsultationDraftEntity
 import com.xjb.wenzhen.data.db.ConsultationEntity
+import com.xjb.wenzhen.data.db.ConsultationRepository
 import com.xjb.wenzhen.data.db.ConversationJsonCodec
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.LlmConfig
@@ -40,7 +44,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -122,12 +128,14 @@ class AppViewModelTest {
         client: LlmClient,
         settingsRepository: SettingsRepository = this.settingsRepository,
         inviteRedeemer: InviteRedeemer? = null,
+        consultationRepository: ConsultationRepository? = null,
     ): AppContainer = AppContainer(
         context,
         overrideLlmClient = client,
         overrideDatabase = db,
         overrideSettingsRepository = settingsRepository,
         overrideInviteRedeemer = inviteRedeemer,
+        overrideConsultationRepository = consultationRepository,
     )
 
     private fun viewModel(
@@ -135,7 +143,8 @@ class AppViewModelTest {
         settings: AppSettings = apiSettings(),
         settingsRepository: SettingsRepository = this.settingsRepository,
         inviteRedeemer: InviteRedeemer? = null,
-        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer),
+        consultationRepository: ConsultationRepository? = null,
+        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer, consultationRepository),
     ): AppViewModel {
         val medicalCase = BuiltInCases.all.first()
         val initial = AppUiState(
@@ -542,6 +551,33 @@ class AppViewModelTest {
         val draft = runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() }
         assertNotNull(draft)
         assertEquals(newCase.id, CaseJsonCodec.decode(draft!!.caseJson).id)
+    }
+
+    @Test
+    fun `删除历史记录遇到数据库异常时不崩溃并收到提示`() = runTest(dispatcher) {
+        val failingDao = object : ConsultationDao {
+            override fun observeAll(): Flow<List<ConsultationEntity>> = flowOf(emptyList())
+            override suspend fun getById(id: Long): ConsultationEntity? = null
+            override suspend fun findCompletedAfter(caseJson: String, since: Long): ConsultationEntity? = null
+            override suspend fun insert(entity: ConsultationEntity): Long =
+                throw SQLiteException("disk I/O error")
+            override suspend fun countBySignature(caseJson: String, createdAt: Long): Int = 0
+            override suspend fun updateScore(id: Long, scoreJson: String, totalScore: Int): Int = 0
+            override suspend fun deleteById(id: Long) {
+                throw SQLiteException("disk I/O error")
+            }
+            override suspend fun deleteAll() {
+                throw SQLiteException("disk I/O error")
+            }
+        }
+        val vm = viewModel(SuccessClient(), consultationRepository = ConsultationRepository(failingDao))
+        val events = mutableListOf<AppEvent>()
+        backgroundScope.launch { vm.events.collect { events += it } }
+
+        vm.deleteHistory(1L)
+        waitUntil { events.any { it is AppEvent.ShowMessage } }
+
+        assertTrue("events=$events", events.any { it is AppEvent.ShowMessage })
     }
 
     @Test

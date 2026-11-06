@@ -249,7 +249,7 @@ class AppViewModel(
         draftPersistenceEnabled = false
         draftSaveJob?.cancel()
         draftSaveJob = null
-        viewModelScope.launch { container.consultationDraftRepository.clear() }
+        launchDb("清除草稿失败，请稍后重试。") { container.consultationDraftRepository.clear() }
         _uiState.update { it.copy(draft = null) }
     }
 
@@ -1331,17 +1331,18 @@ class AppViewModel(
     }
 
     fun deleteHistory(id: Long) {
-        viewModelScope.launch { container.consultationRepository.delete(id) }
+        launchDb("删除历史记录失败，请稍后重试。") { container.consultationRepository.delete(id) }
     }
 
     fun clearHistory() {
-        viewModelScope.launch { container.consultationRepository.clear() }
+        launchDb("清空历史记录失败，请稍后重试。") { container.consultationRepository.clear() }
     }
 
     fun restoreHistory(records: List<ConsultationEntity>) {
         if (records.isEmpty()) return
-        viewModelScope.launch {
-            container.consultationRepository.restoreAll(records)
+        launchDb("恢复历史记录失败，请稍后重试。") {
+            val restored = container.consultationRepository.restoreAll(records)
+            _events.send(AppEvent.ShowMessage("已恢复 $restored 条"))
         }
     }
 
@@ -1371,19 +1372,26 @@ class AppViewModel(
 
     private fun observeDraft() {
         viewModelScope.launch {
-            val draft = container.consultationDraftRepository.get()
-            if (draft != null &&
-                container.consultationRepository.findCompletedAfter(draft.caseJson, draft.startedAt) != null
-            ) {
-                // v1.3.2 及更早版本在结果页退后台时可能把已完成的问诊写回草稿；
-                // 同一病例在草稿开始之后已有完成记录，说明这是完成后的残留，启动时直接清掉。
-                container.consultationDraftRepository.clear()
+            try {
+                val draft = container.consultationDraftRepository.get()
+                if (draft != null &&
+                    container.consultationRepository.findCompletedAfter(draft.caseJson, draft.startedAt) != null
+                ) {
+                    // v1.3.2 及更早版本在结果页退后台时可能把已完成的问诊写回草稿；
+                    // 同一病例在草稿开始之后已有完成记录，说明这是完成后的残留，启动时直接清掉。
+                    container.consultationDraftRepository.clear()
+                    _uiState.update { it.copy(draft = null) }
+                } else {
+                    // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
+                    // 再把读取到的旧草稿快照写回状态，否则首页会误报存在未完成问诊。
+                    if (!draftPersistenceEnabled) return@launch
+                    _uiState.update { it.copy(draft = draft) }
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                // 草稿读取失败按“没有草稿”处理即可，不应打扰用户。
                 _uiState.update { it.copy(draft = null) }
-            } else {
-                // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
-                // 再把读取到的旧草稿快照写回状态，否则首页会误报存在未完成问诊。
-                if (!draftPersistenceEnabled) return@launch
-                _uiState.update { it.copy(draft = draft) }
             }
         }
     }
@@ -1391,24 +1399,29 @@ class AppViewModel(
     private fun observeSavedCases() {
         savedCaseJob?.cancel()
         savedCaseJob = viewModelScope.launch {
-            container.savedCaseRepository.observeAll().collect { saved ->
-                val generated = saved.mapNotNull { entity ->
-                    runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
+            container.savedCaseRepository.observeAll()
+                .catch {
+                    // 收藏病例读取失败时至少保留内置病例，避免首页病例列表为空。
+                    _uiState.update { it.copy(cases = BuiltInCases.all) }
                 }
-                _uiState.update { it.copy(cases = BuiltInCases.all + generated, savedCases = saved) }
-            }
+                .collect { saved ->
+                    val generated = saved.mapNotNull { entity ->
+                        runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
+                    }
+                    _uiState.update { it.copy(cases = BuiltInCases.all + generated, savedCases = saved) }
+                }
         }
     }
 
     fun toggleSavedCaseFavorite(caseId: String) {
-        viewModelScope.launch {
-            val current = _uiState.value.savedCases.firstOrNull { it.id == caseId } ?: return@launch
+        launchDb("更新收藏失败，请稍后重试。") {
+            val current = _uiState.value.savedCases.firstOrNull { it.id == caseId } ?: return@launchDb
             container.savedCaseRepository.setFavorite(caseId, !current.favorite)
         }
     }
 
     fun deleteSavedCase(caseId: String) {
-        viewModelScope.launch {
+        launchDb("删除病例失败，请稍后重试。") {
             container.savedCaseRepository.delete(caseId)
         }
     }
@@ -1431,20 +1444,37 @@ class AppViewModel(
     }
 
     private suspend fun persistDraftNow() {
-        if (!draftPersistenceEnabled) return
-        val state = _uiState.value
-        val medicalCase = state.activeCase ?: return
-        val startedAt = state.consultationStartedAt ?: return
-        val draft = ConsultationDraftEntity(
-            caseJson = CaseJsonCodec.encode(medicalCase),
-            conversationJson = ConversationJsonCodec.encode(state.messages),
-            patientPersonality = state.patientPersonality.name,
-            encounterType = state.encounterType.name,
-            startedAt = startedAt,
-            updatedAt = System.currentTimeMillis(),
-        )
-        container.consultationDraftRepository.save(draft)
-        _uiState.update { it.copy(draft = draft) }
+        try {
+            if (!draftPersistenceEnabled) return
+            val state = _uiState.value
+            val medicalCase = state.activeCase ?: return
+            val startedAt = state.consultationStartedAt ?: return
+            val draft = ConsultationDraftEntity(
+                caseJson = CaseJsonCodec.encode(medicalCase),
+                conversationJson = ConversationJsonCodec.encode(state.messages),
+                patientPersonality = state.patientPersonality.name,
+                encounterType = state.encounterType.name,
+                startedAt = startedAt,
+                updatedAt = System.currentTimeMillis(),
+            )
+            container.consultationDraftRepository.save(draft)
+            _uiState.update { it.copy(draft = draft) }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            // 草稿保存是后台行为，失败时静默处理，不能影响正常问诊。
+        }
+    }
+
+    /** Room 调用统一走这里：失败提示用户而不是让异常冒到默认处理器导致崩溃。 */
+    private fun launchDb(failureMessage: String, block: suspend () -> Unit) = viewModelScope.launch {
+        try {
+            block()
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _events.send(AppEvent.ShowMessage(friendlyMessage(e, failureMessage)))
+        }
     }
 
     private fun friendlyMessage(error: Throwable, fallback: String): String =
