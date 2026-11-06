@@ -130,16 +130,64 @@ class DeepSeekClientHttpTest {
     }
 
     @Test
-    fun `内置服务优先使用健康检查`() = runBlocking {
+    fun `健康检查响应非 JSON 时按可用处理并继续校验会话`() = runBlocking {
         server.enqueue(MockResponse().setResponseCode(200))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
 
         val result = client.testConnection(relayConfig())
 
         assertEquals(ConnectionTestResult.Success, result)
+        assertEquals(2, server.requestCount)
         val request = server.takeRequest()
         assertEquals("/v1/health", request.path)
         assertEquals("Bearer session-token", request.getHeader("Authorization"))
         assertEquals("device-1", request.getHeader("X-Device-Id"))
+    }
+
+    @Test
+    fun `健康检查通过但会话失效时测试连接失败并提示重新兑换`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"relayEnabled":true}"""))
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(401)
+                .setBody("""{"error":{"code":"unauthorized"}}"""),
+        )
+
+        val result = client.testConnection(relayConfig())
+
+        assertTrue(result is ConnectionTestResult.Failure)
+        assertTrue((result as ConnectionTestResult.Failure).message.contains("重新兑换"))
+        assertEquals(2, server.requestCount)
+        assertEquals("/v1/health", server.takeRequest().path)
+        assertEquals("/v1/chat/completions", server.takeRequest().path)
+    }
+
+    @Test
+    fun `健康检查通过且会话有效时测试连接成功`() = runBlocking {
+        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"relayEnabled":true}"""))
+        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
+
+        val result = client.testConnection(relayConfig())
+
+        assertEquals(ConnectionTestResult.Success, result)
+        assertEquals(2, server.requestCount)
+        assertEquals("/v1/health", server.takeRequest().path)
+        assertEquals("/v1/chat/completions", server.takeRequest().path)
+    }
+
+    @Test
+    fun `健康检查返回服务关闭时测试连接直接失败`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(200)
+                .setBody("""{"ok":true,"relayEnabled":false}"""),
+        )
+
+        val result = client.testConnection(relayConfig())
+
+        assertTrue(result is ConnectionTestResult.Failure)
+        assertEquals("内置服务暂不可用", (result as ConnectionTestResult.Failure).message)
+        assertEquals(1, server.requestCount)
     }
 
     @Test

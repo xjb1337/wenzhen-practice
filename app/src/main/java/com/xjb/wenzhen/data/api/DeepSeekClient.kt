@@ -157,12 +157,13 @@ class DeepSeekClient(
                 )
             }
             if (config.useRelay) {
+                // health 只说明服务是否开启，并不校验会话；Healthy 后继续用 1-token ping 验证 token。
                 when (val health = relayClient.checkHealth(
                     baseUrl = config.baseUrl,
                     sessionToken = config.apiKey,
                     deviceId = config.deviceId,
                 )) {
-                    RelayHealthResult.Healthy -> return@withContext ConnectionTestResult.Success
+                    RelayHealthResult.Healthy -> Unit
                     RelayHealthResult.Missing -> Unit
                     is RelayHealthResult.Failure ->
                         return@withContext ConnectionTestResult.Failure(health.message)

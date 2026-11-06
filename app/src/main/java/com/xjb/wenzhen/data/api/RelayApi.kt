@@ -171,7 +171,7 @@ class RelayClient(
         try {
             httpClient.newCall(builder.build()).execute().use { response ->
                 when {
-                    response.isSuccessful -> RelayHealthResult.Healthy
+                    response.isSuccessful -> parseHealthBody(response.body?.string().orEmpty())
                     response.code == 404 || response.code == 405 || response.code == 501 ->
                         RelayHealthResult.Missing
                     else -> RelayHealthResult.Failure(
@@ -183,6 +183,25 @@ class RelayClient(
             throw error
         } catch (error: Exception) {
             RelayHealthResult.Failure(networkErrorMessage(error))
+        }
+    }
+
+    /**
+     * health 成功响应只有在显式声明 ok=true 且未关闭 relay 时才算可用；
+     * 非 JSON 响应按旧版 Worker 兼容处理为可用。
+     */
+    private fun parseHealthBody(body: String): RelayHealthResult {
+        val json = runCatching { JSONObject(body) }.getOrNull()
+            ?: return RelayHealthResult.Healthy
+        val relayEnabled = if (json.has("relayEnabled") && !json.isNull("relayEnabled")) {
+            json.optBoolean("relayEnabled", true)
+        } else {
+            null
+        }
+        return if (json.optBoolean("ok", false) && relayEnabled != false) {
+            RelayHealthResult.Healthy
+        } else {
+            RelayHealthResult.Failure("内置服务暂不可用")
         }
     }
 
