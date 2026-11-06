@@ -147,6 +147,20 @@ class UpdateChecker(
             ) {
                 throw UpdateParseException("更新包签名不是官方发布证书，已停止安装。")
             }
+            val archiveInfo = ApkArchiveInfoReader.read(appContext, partial)
+                ?: throw UpdateParseException("无法读取更新包信息，已停止安装。")
+            val currentVersionCode = ApkArchiveInfoReader.installedVersionCode(appContext)
+                ?: throw UpdateParseException("无法读取当前版本信息，已停止安装。")
+            val archiveError = validateArchive(
+                expectedPackage = appContext.packageName,
+                expectedVersion = update.versionCode.toLong(),
+                currentVersion = currentVersionCode,
+                actualPackage = archiveInfo.packageName,
+                actualVersion = archiveInfo.versionCode,
+            )
+            if (archiveError != null) {
+                throw UpdateParseException(archiveError)
+            }
             if (!partial.renameTo(target)) {
                 partial.copyTo(target, overwrite = true)
                 partial.delete()
