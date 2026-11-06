@@ -883,6 +883,12 @@ class AppViewModel(
                         },
                     )
                 }
+                if (!stillSame) {
+                    // 旧问诊在用户已开启新问诊后失败：结果页已不属于它，仍需明确告知保存失败。
+                    _events.send(
+                        AppEvent.ShowMessage("上一次问诊「${medicalCase.title}」保存失败，请稍后重试。")
+                    )
+                }
             }
         }
     }
