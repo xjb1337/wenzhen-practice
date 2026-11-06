@@ -863,6 +863,18 @@ class AppViewModelTest {
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
     }
 
+    @Test
+    fun `测试连接遇到协程取消时不写入失败状态`() = runTest(dispatcher) {
+        val vm = viewModel(CancellingClient())
+
+        vm.testConnection(ApiSource.OWN_KEY, "key", "deepseek-chat", "https://api.deepseek.com", ThinkingLevel.OFF)
+        advanceUntilIdle()
+
+        assertTrue(vm.uiState.value.connectionTest.isTesting)
+        assertNull(vm.uiState.value.connectionTest.message)
+        assertNull(vm.uiState.value.connectionTest.isSuccess)
+    }
+
     private fun waitUntil(condition: () -> Boolean) {
         repeat(200) {
             dispatcher.scheduler.advanceUntilIdle()
@@ -870,6 +882,18 @@ class AppViewModelTest {
             Thread.sleep(10)
         }
         assertTrue("等待条件超时", condition())
+    }
+
+    private class CancellingClient : LlmClient {
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String = throw kotlinx.coroutines.CancellationException("cancelled")
+
+        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+            throw kotlinx.coroutines.CancellationException("cancelled")
     }
 
     private class SuccessClient(private val reply: String = "收到。") : LlmClient {

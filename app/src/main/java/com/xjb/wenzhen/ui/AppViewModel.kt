@@ -655,6 +655,8 @@ class AppViewModel(
                     )
                 )
                 openCase(generated, finalPersonality, resolved.encounterType)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -866,6 +868,8 @@ class AppViewModel(
                 draftMutex.withLock { container.consultationDraftRepository.clear() }
                 _uiState.update { it.copy(draft = null) }
                 _events.send(AppEvent.OpenResult)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 val stillSame = _uiState.value.activeCase?.id == sessionKey.first &&
                     _uiState.value.consultationStartedAt == sessionKey.second
@@ -1181,6 +1185,8 @@ class AppViewModel(
                         }
                     )
                 }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -1223,6 +1229,8 @@ class AppViewModel(
                         }
                     }
                 }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -1259,6 +1267,8 @@ class AppViewModel(
                 _uiState.update {
                     it.copy(updateState = UpdateUiState.Downloaded(update, file))
                 }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
@@ -1316,6 +1326,8 @@ class AppViewModel(
                         historyDetailError = null,
                     )
                 }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
