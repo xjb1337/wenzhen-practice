@@ -91,6 +91,8 @@ data class MedicalCase(
     val differentialDiagnoses: List<String>,
     val isAiGenerated: Boolean = false,
     val treatmentPlan: String = "",
+    /** 与正确诊断等价的写法（例如英文缩写），本地诊断评分命中别名时按完全正确计分。 */
+    val diagnosisAliases: List<String> = emptyList(),
 ) {
     val patientSummary: String
         get() = "${patient.name} · ${patient.gender} · ${patient.age} · ${patient.occupation}"

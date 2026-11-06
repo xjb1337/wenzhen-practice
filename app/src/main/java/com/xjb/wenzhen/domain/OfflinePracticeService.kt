@@ -11,14 +11,26 @@ object OfflinePracticeService {
     fun patientReply(medicalCase: MedicalCase, messages: List<ChatMessage>): String {
         val question = messages.lastOrNull { it.role == MessageRole.DOCTOR }?.content.orEmpty()
         val matched = when {
-            listOf("多久", "什么时候", "几天", "多长").any(question::contains) -> medicalCase.presentIllness
-            listOf("既往", "以前", "病史", "慢性病", "手术", "过敏", "用药").any(question::contains) -> medicalCase.pastHistory
-            listOf("吸烟", "抽烟", "饮酒", "喝酒", "职业", "工作").any(question::contains) -> medicalCase.personalHistory
-            listOf("家族", "父母", "家里人", "家人").any(question::contains) -> medicalCase.familyHistory
-            listOf("月经", "例假", "怀孕", "生育").any(question::contains) -> medicalCase.maritalHistory
+            listOf("多久", "什么时候", "几天", "多长").any(question::contains) ->
+                concise(medicalCase.presentIllness, sentences = 1)
+            listOf("既往", "以前", "病史", "慢性病", "手术", "过敏", "用药").any(question::contains) ->
+                concise(medicalCase.pastHistory)
+            listOf("吸烟", "抽烟", "饮酒", "喝酒", "职业", "工作").any(question::contains) ->
+                concise(medicalCase.personalHistory)
+            listOf("家族", "父母", "家里人", "家人").any(question::contains) ->
+                concise(medicalCase.familyHistory)
+            listOf("月经", "例假", "怀孕", "生育").any(question::contains) ->
+                concise(medicalCase.maritalHistory)
             else -> "我能想到的就是${medicalCase.chiefComplaint}，其他情况请您具体问我。"
         }
-        return matched.ifBlank { medicalCase.presentIllness }
+        return matched.ifBlank { "这个我说不太清楚，您再具体问问我。" }
+    }
+
+    /** 只回答与当前问题相关的前几段，避免离线模式一次性倾倒整份病例资料。 */
+    private fun concise(text: String, sentences: Int = 2): String {
+        val parts = text.split('。').map { it.trim() }.filter { it.isNotEmpty() }
+        if (parts.isEmpty()) return ""
+        return parts.take(sentences).joinToString("。") + "。"
     }
 
     fun clinicalResult(medicalCase: MedicalCase, requestType: ClinicalRequestType): String =
@@ -53,7 +65,7 @@ object OfflinePracticeService {
             coveredPoints = rule.coveredQuestions,
             missedQuestions = rule.missedQuestions,
             strengths = listOf("已完成离线基础训练流程。"),
-            improvements = listOfNotNull(scopeNote.takeIf { it.isNotBlank() }),
+            improvements = listOfNotNull(scopeNote.takeIf { it.isNotBlank() }) + rule.notes,
             correctDiagnosis = medicalCase.correctDiagnosis,
             diagnosisExplanation = "离线模式使用内置病例资料和本地规则评分，适合熟悉问诊流程。",
             evidence = rule.evidence,

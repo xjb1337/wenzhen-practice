@@ -29,8 +29,10 @@ import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.CaseGenerationSelection
 import com.xjb.wenzhen.domain.OfflinePracticeService
 import com.xjb.wenzhen.domain.ReferenceCarePlanBuilder
+import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.domain.ScoreService
 import com.xjb.wenzhen.ui.theme.AppTheme
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
@@ -79,6 +81,9 @@ class AppViewModel(
     private var savedCaseJob: Job? = null
     private var patientReplyJob: Job? = null
     private var clinicalJob: Job? = null
+    /** 每次请求递增；旧请求（即使网络层取消迟到）不能写入新一代气泡。 */
+    private var patientReplyGeneration = 0L
+    private var clinicalGeneration = 0L
 
     init {
         observeHistory()
@@ -94,6 +99,19 @@ class AppViewModel(
         super.onCleared()
     }
 
+    /**
+     * 切换病例/恢复草稿时使所有在途请求失效。取消网络请求之外还要递增代次，
+     * 防止底层阻塞读在 cancel 之后仍回调旧片段。
+     */
+    private fun cancelPendingRequests() {
+        patientReplyGeneration += 1
+        clinicalGeneration += 1
+        patientReplyJob?.cancel()
+        patientReplyJob = null
+        clinicalJob?.cancel()
+        clinicalJob = null
+    }
+
     fun selectDepartment(department: String) {
         _uiState.update { it.copy(selectedDepartment = department) }
     }
@@ -103,6 +121,7 @@ class AppViewModel(
         personality: PatientPersonality = PatientPersonality.COOPERATIVE,
         encounterType: EncounterType = EncounterType.OUTPATIENT,
     ) {
+        cancelPendingRequests()
         draftPersistenceEnabled = true
         val startedAt = System.currentTimeMillis()
         val doctorOpeningMessage = ChatMessage(
@@ -146,8 +165,16 @@ class AppViewModel(
             .onSuccess { _uiState.update { it.copy(settings = updated) } }
     }
 
+    /** 首次启动的隐私与 AI 使用告知确认。保存失败也先放行本次会话，下次启动会再次提示。 */
+    fun acceptPrivacyNotice() {
+        val updated = _uiState.value.settings.copy(privacyAccepted = true)
+        runCatching { container.settingsRepository.save(updated) }
+        _uiState.update { it.copy(settings = updated) }
+    }
+
     fun resumeDraft() {
         val draft = _uiState.value.draft ?: return
+        cancelPendingRequests()
         draftPersistenceEnabled = true
         val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return
         val messages = ensureDoctorOpening(
@@ -281,10 +308,7 @@ class AppViewModel(
     fun cancelCurrentRequest() {
         val state = _uiState.value
         if (!state.isPatientTyping && !state.isQueryingClinical) return
-        patientReplyJob?.cancel()
-        patientReplyJob = null
-        clinicalJob?.cancel()
-        clinicalJob = null
+        cancelPendingRequests()
         _uiState.update { latest ->
             val messages = latest.messages.toMutableList()
             if (latest.isPatientTyping) {
@@ -324,16 +348,19 @@ class AppViewModel(
         conversation: List<ChatMessage>,
         doctorIndex: Int,
     ) {
+        val generation = ++patientReplyGeneration
         patientReplyJob = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             try {
                 if (config.apiKey.isBlank() && _uiState.value.settings.offlineMode) {
                     val reply = OfflinePracticeService.patientReply(medicalCase, conversation)
                     _uiState.update { latest ->
+                        if (generation != patientReplyGeneration) return@update latest
                         finishPatientReply(
                             latest = latest,
                             caseId = medicalCase.id,
                             doctorIndex = doctorIndex,
+                            generation = generation,
                             reply = reply,
                         ).copy(
                             lastReplyMillis = System.currentTimeMillis() - startedAt,
@@ -357,10 +384,12 @@ class AppViewModel(
                                     latest = latest,
                                     caseId = medicalCase.id,
                                     doctorIndex = doctorIndex,
+                                    generation = generation,
                                     delta = delta,
                                 )
                             }
-                            scheduleDraftSave()
+                            // 流式片段不逐条落草稿：收尾或失败时会统一保存一次，
+                            // 避免每个 token 都取消/重启防抖任务。
                         }
                     },
                 )
@@ -368,10 +397,12 @@ class AppViewModel(
                     throw IllegalStateException("患者没有返回内容，请重新询问。")
                 }
                 _uiState.update { latest ->
+                    if (generation != patientReplyGeneration) return@update latest
                     val updated = finishPatientReply(
                         latest = latest,
                         caseId = medicalCase.id,
                         doctorIndex = doctorIndex,
+                        generation = generation,
                         reply = reply,
                     )
                     updated.copy(
@@ -389,6 +420,7 @@ class AppViewModel(
                         latest = latest,
                         caseId = medicalCase.id,
                         doctorIndex = doctorIndex,
+                        generation = generation,
                         message = friendlyMessage(error, "发送失败，请检查网络后重试。"),
                     )
                 }
@@ -401,9 +433,10 @@ class AppViewModel(
         latest: AppUiState,
         caseId: String,
         doctorIndex: Int,
+        generation: Long,
         delta: String,
     ): AppUiState {
-        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        if (latest.activeCase?.id != caseId || generation != patientReplyGeneration) return latest
         if (latest.messages.getOrNull(doctorIndex)?.deliveryState != MessageDeliveryState.SENDING) {
             return latest
         }
@@ -433,9 +466,10 @@ class AppViewModel(
         latest: AppUiState,
         caseId: String,
         doctorIndex: Int,
+        generation: Long,
         reply: String,
     ): AppUiState {
-        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        if (latest.activeCase?.id != caseId || generation != patientReplyGeneration) return latest
         val updated = latest.messages.toMutableList()
         updated.getOrNull(doctorIndex)?.let { doctor ->
             updated[doctorIndex] = doctor.copy(deliveryState = MessageDeliveryState.SENT)
@@ -470,9 +504,10 @@ class AppViewModel(
         latest: AppUiState,
         caseId: String,
         doctorIndex: Int,
+        generation: Long,
         message: String,
     ): AppUiState {
-        if (latest.activeCase?.id != caseId) return latest.copy(isPatientTyping = false)
+        if (latest.activeCase?.id != caseId || generation != patientReplyGeneration) return latest
         val updated = latest.messages.toMutableList()
         updated.getOrNull(doctorIndex)?.let { doctor ->
             updated[doctorIndex] = doctor.copy(deliveryState = MessageDeliveryState.FAILED)
@@ -510,6 +545,7 @@ class AppViewModel(
         }
 
         _uiState.update { it.copy(isQueryingClinical = true, chatError = null) }
+        val generation = ++clinicalGeneration
         clinicalJob = viewModelScope.launch {
             try {
                 val result = if (state.settings.offlineMode && !state.hasApiKey) {
@@ -523,8 +559,8 @@ class AppViewModel(
                     )
                 }
                 _uiState.update { latest ->
-                    if (latest.activeCase?.id != medicalCase.id) {
-                        latest.copy(isQueryingClinical = false)
+                    if (latest.activeCase?.id != medicalCase.id || generation != clinicalGeneration) {
+                        latest
                     } else {
                         latest.copy(
                             messages = latest.messages + ChatMessage(
@@ -541,6 +577,7 @@ class AppViewModel(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (generation != clinicalGeneration) return@launch
                 _uiState.update {
                     it.copy(
                         isQueryingClinical = false,
@@ -709,60 +746,56 @@ class AppViewModel(
                 }
 
                 val recordFailure = recordResult.exceptionOrNull()
-                val scoreFailure = scoreResult.exceptionOrNull()
                 val record = recordResult.getOrDefault("")
-                val score = scoreResult.getOrNull()
-                if (score == null && record.isBlank()) {
-                    throw scoreFailure ?: IllegalStateException("评分生成失败")
-                }
-                val createdAt = System.currentTimeMillis()
-                val resultId: Long
-                val effectiveScore: ScoreResult
-                val notice: String?
-                if (score != null) {
-                    effectiveScore = score
-                    notice = if (recordFailure != null && generateRecord) {
-                        "病历生成失败，已保留评分结果：${friendlyMessage(recordFailure, "请稍后重试")}"
-                    } else {
-                        null
-                    }
-                    val entity = ConsultationEntity(
-                        caseTitle = medicalCase.title,
-                        department = medicalCase.department,
-                        difficulty = medicalCase.difficulty.label,
-                        patientName = medicalCase.patient.name,
-                        caseJson = CaseJsonCodec.encode(medicalCase),
-                        conversationJson = ConversationJsonCodec.encode(conversation),
-                        medicalRecord = record,
-                        scoreJson = ScoreParser.encode(score),
-                        totalScore = score.totalScore,
+                // ScoreService 在 LLM 超时/限流/JSON 损坏时已经返回“规则分 + AI 点评失败”；
+                // 这里只兜底意料之外的异常：本地重新计算规则分，保证分数一定能入库。
+                // 规则分本身也算不出来时异常会进入下方 catch，草稿和对话原样保留，可在结束页再次提交。
+                val score = scoreResult.getOrNull() ?: ScoreService.ruleOnly(
+                    medicalCase = medicalCase,
+                    messages = conversation,
+                    rule = RuleScoreCalculator.compute(
+                        medicalCase = medicalCase,
+                        messages = conversation,
                         initialDiagnosis = diagnosis,
                         diagnosisBasis = diagnosisBasis.trim(),
-                        createdAt = createdAt,
-                        patientPersonality = state.patientPersonality.name,
-                        encounterType = state.encounterType.name,
                         treatmentAnswer = treatmentAnswer.trim(),
-                        recordType = if (record.isNotBlank()) state.encounterType.name else "NONE",
-                    )
-                    resultId = container.consultationRepository.save(entity)
-                } else {
-                    effectiveScore = ScoreResult(
-                        totalScore = 0,
-                        coverageScore = 0,
-                        techniqueScore = 0,
-                        communicationScore = 0,
-                        diagnosisScore = 0,
-                        treatmentScore = 0,
-                        coveredPoints = emptyList(),
-                        missedQuestions = emptyList(),
-                        strengths = emptyList(),
-                        improvements = listOf("评分未生成，可返回后重试评分。"),
-                        correctDiagnosis = medicalCase.correctDiagnosis,
-                        diagnosisExplanation = "评分生成失败，暂不写入历史记录。",
-                    )
-                    resultId = 0L
-                    notice = "评分生成失败，以下仅展示已生成的病历：${friendlyMessage(scoreFailure ?: IllegalStateException("评分生成失败"), "请稍后重试")}"
-                }
+                    ),
+                    error = scoreResult.exceptionOrNull(),
+                )
+                val createdAt = System.currentTimeMillis()
+                val entity = ConsultationEntity(
+                    caseTitle = medicalCase.title,
+                    department = medicalCase.department,
+                    difficulty = medicalCase.difficulty.label,
+                    patientName = medicalCase.patient.name,
+                    caseJson = CaseJsonCodec.encode(medicalCase),
+                    conversationJson = ConversationJsonCodec.encode(conversation),
+                    medicalRecord = record,
+                    scoreJson = ScoreParser.encode(score),
+                    totalScore = score.totalScore,
+                    initialDiagnosis = diagnosis,
+                    diagnosisBasis = diagnosisBasis.trim(),
+                    createdAt = createdAt,
+                    patientPersonality = state.patientPersonality.name,
+                    encounterType = state.encounterType.name,
+                    treatmentAnswer = treatmentAnswer.trim(),
+                    recordType = if (record.isNotBlank()) state.encounterType.name else "NONE",
+                )
+                // 先写入历史：保存失败会进入 catch，此时不清草稿、不离开结束页。
+                val resultId = container.consultationRepository.save(entity)
+                val notice = listOfNotNull(
+                    if (score.aiCommentFailed) {
+                        "AI 点评生成失败，分数已按本地规则计算并保存到历史记录，可在“点评”页重新生成：" +
+                            (score.aiCommentError ?: "请稍后重试")
+                    } else {
+                        null
+                    },
+                    if (recordFailure != null && generateRecord) {
+                        "病历生成失败，已保存评分结果：${friendlyMessage(recordFailure, "请稍后重试")}"
+                    } else {
+                        null
+                    },
+                ).joinToString("\n").ifBlank { null }
                 val result = ResultViewData(
                     recordId = resultId,
                     caseTitle = medicalCase.title,
@@ -771,7 +804,7 @@ class AppViewModel(
                     difficulty = medicalCase.difficulty.label,
                     createdAt = createdAt,
                     medicalRecord = record,
-                    score = effectiveScore,
+                    score = score,
                     initialDiagnosis = diagnosis,
                     treatmentAnswer = treatmentAnswer.trim(),
                     encounterType = state.encounterType,
@@ -786,8 +819,8 @@ class AppViewModel(
                         currentResult = result,
                     )
                 }
-                // 只要走到了结果页，本次问诊就已经结束：即使评分生成失败、只展示了病历，
-                // 也必须清掉草稿，并停止后续 onStop/flushDraft 再把它写回来。
+                // 走到这里说明本次问诊已经写入历史：此时才清掉草稿，
+                // 并停止后续 onStop/flushDraft 再把它写回来。
                 draftPersistenceEnabled = false
                 draftSaveJob?.cancel()
                 draftSaveJob = null
@@ -807,6 +840,65 @@ class AppViewModel(
 
     fun clearFinishError() {
         _uiState.update { it.copy(finishError = null) }
+    }
+
+    /**
+     * 结果页/历史详情的“重新生成 AI 点评”：按记录 id 从历史表读回病例、对话和作答，只补跑 LLM 点评。
+     * 分数仍由本地规则计算；成功后覆盖同一条记录的 scoreJson，失败时保留原记录并给出提示。
+     */
+    fun regenerateAiComment(recordId: Long) {
+        if (recordId <= 0L) return
+        val state = _uiState.value
+        if (state.regeneratingCommentId != null) return
+        if (!state.hasApiKey) {
+            updateResultView(recordId) {
+                it.copy(notice = "生成 AI 点评需要联网：${state.settings.aiSetupMessage}")
+            }
+            viewModelScope.launch { _events.send(AppEvent.OpenSettings) }
+            return
+        }
+        val config = state.settings.toLlmConfig()
+        _uiState.update { it.copy(regeneratingCommentId = recordId) }
+        viewModelScope.launch {
+            try {
+                val entity = container.consultationRepository.getById(recordId)
+                    ?: throw IllegalStateException("这条问诊记录不存在或已被删除。")
+                val score = container.scoreService.evaluate(
+                    config = config,
+                    medicalCase = CaseJsonCodec.decode(entity.caseJson),
+                    messages = ConversationJsonCodec.decode(entity.conversationJson),
+                    initialDiagnosis = entity.initialDiagnosis,
+                    diagnosisBasis = entity.diagnosisBasis,
+                    encounterType = EncounterType.from(entity.encounterType),
+                    treatmentAnswer = entity.treatmentAnswer,
+                )
+                if (score.aiCommentFailed) {
+                    updateResultView(recordId) {
+                        it.copy(notice = "AI 点评仍未生成：${score.aiCommentError ?: "请稍后重试"}。分数已保存，可稍后再试。")
+                    }
+                } else {
+                    container.consultationRepository.updateScore(recordId, ScoreParser.encode(score), score.totalScore)
+                    updateResultView(recordId) { it.copy(score = score, notice = null) }
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                updateResultView(recordId) {
+                    it.copy(notice = "AI 点评重新生成失败：${friendlyMessage(error, "请稍后重试")}")
+                }
+            } finally {
+                _uiState.update { it.copy(regeneratingCommentId = null) }
+            }
+        }
+    }
+
+    private fun updateResultView(recordId: Long, transform: (ResultViewData) -> ResultViewData) {
+        _uiState.update { state ->
+            state.copy(
+                currentResult = state.currentResult?.let { if (it.recordId == recordId) transform(it) else it },
+                historyDetail = state.historyDetail?.let { if (it.recordId == recordId) transform(it) else it },
+            )
+        }
     }
 
     fun saveSettings(
@@ -1209,9 +1301,7 @@ class AppViewModel(
     fun restoreHistory(records: List<ConsultationEntity>) {
         if (records.isEmpty()) return
         viewModelScope.launch {
-            records.forEach { record ->
-                container.consultationRepository.save(record.copy(id = 0L))
-            }
+            container.consultationRepository.restoreAll(records)
         }
     }
 

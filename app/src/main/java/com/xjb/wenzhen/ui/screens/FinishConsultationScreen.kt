@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.TealContainer
@@ -61,6 +62,7 @@ fun FinishConsultationScreen(
     onDismissError: () -> Unit = {},
     initialTreatment: String = "",
     initialGenerateRecord: Boolean = false,
+    thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
 ) {
     var diagnosis by rememberSaveable { mutableStateOf(initialDiagnosis) }
     var basis by rememberSaveable { mutableStateOf(initialDiagnosisBasis) }
@@ -267,7 +269,11 @@ fun FinishConsultationScreen(
                             modifier = Modifier.size(19.dp),
                         )
                         Text(
-                            text = "对话未涉及的内容会在大病历中标注为“未问及”。提交后请稍候，生成通常需要十几秒。",
+                            text = if (thinkingLevel == ThinkingLevel.MAX) {
+                                "对话未涉及的内容会在大病历中标注为“未问及”。当前为最高思考强度，生成可能需要 1-3 分钟，请耐心等待。"
+                            } else {
+                                "对话未涉及的内容会在大病历中标注为“未问及”。提交后请稍候，生成通常需要十几秒。"
+                            },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -295,7 +301,11 @@ fun FinishConsultationScreen(
                                 style = MaterialTheme.typography.titleSmall,
                             )
                             Text(
-                                text = "请保持网络连接，不要关闭页面。",
+                                text = if (thinkingLevel == ThinkingLevel.MAX) {
+                                    "最高思考强度较慢，请保持网络连接，不要关闭页面。"
+                                } else {
+                                    "请保持网络连接，不要关闭页面。"
+                                },
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

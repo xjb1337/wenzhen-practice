@@ -43,7 +43,7 @@ def dependencies() -> list[tuple[str, str]]:
     return result
 
 
-def query(package: str, version: str) -> list[dict]:
+def query(package: str, version: str) -> list[dict] | None:
     body = json.dumps(
         {"package": {"name": package, "ecosystem": "Maven"}, "version": version}
     ).encode("utf-8")
@@ -55,16 +55,20 @@ def query(package: str, version: str) -> list[dict]:
             payload = json.load(response)
     except (urllib.error.URLError, TimeoutError) as error:
         print(f"! {package}:{version} query failed: {error}")
-        return []
+        return None
     return payload.get("vulns", [])
 
 
 def main() -> int:
     deps = dependencies()
     findings = 0
+    errors = 0
     print(f"Scanning {len(deps)} direct Maven dependencies with OSV…")
     for package, version in deps:
         vulns = query(package, version)
+        if vulns is None:
+            errors += 1
+            continue
         if not vulns:
             print(f"  OK   {package}:{version}")
             continue
@@ -74,6 +78,9 @@ def main() -> int:
             print(f"  VULN {package}:{version} -> {vuln.get('id')} {aliases}")
     if findings:
         print(f"Found {findings} known vulnerability record(s).")
+        return 1
+    if errors:
+        print(f"{errors} dependency query/queries failed; refusing to report success.")
         return 1
     print("No known vulnerabilities for pinned direct dependencies.")
     return 0

@@ -13,6 +13,7 @@ import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
+import kotlinx.coroutines.CancellationException
 
 class PatientChatService(
     private val llmClient: LlmClient,
@@ -155,19 +156,8 @@ class ScoreService(
         encounterType: EncounterType = EncounterType.OUTPATIENT,
         treatmentAnswer: String = "",
     ): ScoreResult {
-        val raw = llmClient.complete(
-            config = config,
-            messages = listOf(
-                LlmMessage("system", promptBuilder.buildScoreSystemPrompt(medicalCase, encounterType)),
-                LlmMessage(
-                    "user",
-                    promptBuilder.buildScoreUserPrompt(messages, initialDiagnosis, diagnosisBasis, treatmentAnswer, encounterType),
-                ),
-            ),
-            jsonMode = true,
-            temperature = 0.2,
-        )
-        val parsed = ScoreParser.parse(raw)
+        // 分数只由本地规则决定，而且不依赖网络：先算规则分，LLM 只补充文字点评。
+        // 这样 LLM 超时、限流或返回损坏 JSON 时，仍然能拿到分数并写入历史。
         val rule = RuleScoreCalculator.compute(
             medicalCase = medicalCase,
             messages = messages,
@@ -175,10 +165,62 @@ class ScoreService(
             diagnosisBasis = diagnosisBasis,
             treatmentAnswer = treatmentAnswer,
         )
+        val parsed = try {
+            val raw = llmClient.complete(
+                config = config,
+                messages = listOf(
+                    LlmMessage("system", promptBuilder.buildScoreSystemPrompt(medicalCase, encounterType)),
+                    LlmMessage(
+                        "user",
+                        promptBuilder.buildScoreUserPrompt(messages, initialDiagnosis, diagnosisBasis, treatmentAnswer, encounterType),
+                    ),
+                ),
+                jsonMode = true,
+                temperature = 0.2,
+            )
+            ScoreParser.parse(raw)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            return ruleOnly(medicalCase, messages, rule, error)
+        }
         val reconciled = ScoreReconciler.reconcile(parsed, medicalCase, messages, rule)
         return reconciled.copy(
             correctDiagnosis = medicalCase.correctDiagnosis,
+            aiCommentStatus = AiCommentStatus.OK,
+            aiCommentError = null,
         )
+    }
+
+    companion object {
+        /**
+         * 只有规则分、没有 AI 点评的结果：分项、覆盖要点和证据链与正常结果一致，
+         * 优点/改进建议/诊断解析留空，并标记 [AiCommentStatus.FAILED]，结果页据此提供“重新生成 AI 点评”。
+         */
+        fun ruleOnly(
+            medicalCase: MedicalCase,
+            messages: List<ChatMessage>,
+            rule: RuleScore,
+            error: Throwable? = null,
+        ): ScoreResult {
+            val empty = ScoreResult(
+                totalScore = 0,
+                coverageScore = 0,
+                techniqueScore = 0,
+                communicationScore = 0,
+                diagnosisScore = 0,
+                coveredPoints = emptyList(),
+                missedQuestions = emptyList(),
+                strengths = emptyList(),
+                improvements = emptyList(),
+                correctDiagnosis = medicalCase.correctDiagnosis,
+                diagnosisExplanation = "",
+            )
+            return ScoreReconciler.reconcile(empty, medicalCase, messages, rule).copy(
+                aiCommentStatus = AiCommentStatus.FAILED,
+                aiCommentError = error?.message?.trim()?.takeIf { it.isNotEmpty() },
+            )
+        }
     }
 }
 
@@ -208,6 +250,7 @@ object ScoreReconciler {
                 totalScore = rule.total,
                 coveredPoints = coveredPoints,
                 missedQuestions = rule.missedQuestions.distinct(),
+                improvements = (score.improvements + rule.notes).distinct(),
                 evidence = rule.evidence,
                 isLegacy = false,
             )

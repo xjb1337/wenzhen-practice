@@ -27,6 +27,8 @@ data class AppSettings(
     val deviceId: String = "",
     val sessionToken: String = "",
     val relayBaseUrl: String = RELAY_BASE_URL,
+    /** 首启隐私与 AI 使用告知是否已确认。 */
+    val privacyAccepted: Boolean = false,
 ) {
     /** 历史上用于 AI 能力门禁；两种服务模式任一可用的凭据都会返回 true。 */
     val hasApiKey: Boolean

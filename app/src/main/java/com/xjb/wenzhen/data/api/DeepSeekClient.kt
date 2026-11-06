@@ -5,18 +5,29 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
+import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.InterruptedIOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
 import java.net.SocketTimeoutException
+import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
+@OptIn(InternalCoroutinesApi::class)
 class DeepSeekClient(
     private val httpClient: OkHttpClient = defaultHttpClient(),
     private val enforceHttps: Boolean = true,
@@ -38,11 +49,12 @@ class DeepSeekClient(
         val request = request(config, payload, accept = "application/json")
         var lastError: LlmException? = null
         for (attempt in 1..MAX_ATTEMPTS) {
+            currentCoroutineContext().ensureActive()
             try {
-                return@withContext httpClient.newCall(request).execute().use { response ->
+                return@withContext executeCall(httpClientFor(config).newCall(request)) { response ->
                     val body = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
-                        throw LlmException(httpErrorMessage(response.code, body, config.useRelay))
+                        throw httpException(response, body, config.useRelay)
                     }
                     parseContent(body)
                 }
@@ -50,17 +62,25 @@ class DeepSeekClient(
                 throw error
             } catch (error: LlmException) {
                 lastError = error
-                if (attempt < MAX_ATTEMPTS && isRetryable(error)) {
-                    delay(backoffMillis(attempt))
+                if (attempt < MAX_ATTEMPTS && error.retryable) {
+                    delay(retryDelayMillis(attempt, error))
                 } else {
                     throw error
                 }
             } catch (error: Exception) {
-                lastError = LlmException(networkErrorMessage(error), error)
-                if (attempt < MAX_ATTEMPTS) {
-                    delay(backoffMillis(attempt))
+                if (!currentCoroutineContext().isActive) {
+                    throw CancellationException("请求已取消", error)
+                }
+                val typed = LlmException(
+                    message = networkErrorMessage(error),
+                    cause = error,
+                    kind = networkErrorKind(error),
+                )
+                lastError = typed
+                if (attempt < MAX_ATTEMPTS && typed.retryable) {
+                    delay(retryDelayMillis(attempt, typed))
                 } else {
-                    throw lastError!!
+                    throw typed
                 }
             }
         }
@@ -77,21 +97,23 @@ class DeepSeekClient(
         val payload = payload(config, messages, temperature).put("stream", true)
         val request = request(config, payload, accept = "text/event-stream")
         try {
-            httpClient.newCall(request).execute().use { response ->
+            executeCall(httpClientFor(config).newCall(request)) { response ->
                 if (!response.isSuccessful) {
-                    throw LlmException(
-                        httpErrorMessage(
-                            response.code,
-                            response.body?.string().orEmpty(),
-                            config.useRelay,
-                        ),
+                    throw httpException(
+                        response,
+                        response.body?.string().orEmpty(),
+                        config.useRelay,
                     )
                 }
                 val source = response.body?.source()
-                    ?: throw LlmException("AI 服务没有返回内容，请稍后重试。")
+                    ?: throw LlmException(
+                        message = "AI 服务没有返回内容，请稍后重试。",
+                        kind = LlmErrorKind.BAD_RESPONSE,
+                    )
                 val answer = StringBuilder()
                 var finished = false
                 while (!finished) {
+                    currentCoroutineContext().ensureActive()
                     val line = source.readUtf8Line() ?: break
                     when (val event = SseParser.parseLine(line)) {
                         is SseEvent.Delta -> {
@@ -100,12 +122,18 @@ class DeepSeekClient(
                         }
                         SseEvent.Done -> finished = true
                         SseEvent.Ignore -> Unit
-                        is SseEvent.Error -> throw LlmException("AI 服务返回错误：${event.message}")
+                        is SseEvent.Error -> throw LlmException(
+                            message = "AI 服务返回错误：${event.message}",
+                            kind = LlmErrorKind.BAD_RESPONSE,
+                        )
                     }
                 }
                 val result = answer.toString().trim()
                 if (result.isBlank()) {
-                    throw LlmException("AI 服务未返回可用回复，请稍后重试。")
+                    throw LlmException(
+                        message = "AI 服务未返回可用回复，请稍后重试。",
+                        kind = LlmErrorKind.BAD_RESPONSE,
+                    )
                 }
                 result
             }
@@ -114,7 +142,10 @@ class DeepSeekClient(
         } catch (error: LlmException) {
             throw error
         } catch (error: Exception) {
-            throw LlmException(networkErrorMessage(error), error)
+            if (!currentCoroutineContext().isActive) {
+                throw CancellationException("请求已取消", error)
+            }
+            throw LlmException(networkErrorMessage(error), error, networkErrorKind(error))
         }
     }
 
@@ -210,19 +241,26 @@ class DeepSeekClient(
     private fun requireApiKey(config: LlmConfig) {
         if (config.apiKey.isBlank()) {
             throw LlmException(
-                if (config.useRelay) "请先兑换邀请码。" else "请先在设置中填写 DeepSeek API Key。",
+                message = if (config.useRelay) "请先兑换邀请码。" else "请先在设置中填写 DeepSeek API Key。",
+                kind = LlmErrorKind.AUTH,
             )
         }
     }
 
     private fun parseContent(body: String): String {
         if (body.isBlank()) {
-            throw LlmException("AI 服务返回了空内容，请稍后重试。")
+            throw LlmException(
+                message = "AI 服务返回了空内容，请稍后重试。",
+                kind = LlmErrorKind.BAD_RESPONSE,
+            )
         }
         return try {
             val choices = JSONObject(body).optJSONArray("choices")
             if (choices == null || choices.length() == 0) {
-                throw LlmException("AI 服务未返回可用回复，请稍后重试。")
+                throw LlmException(
+                    message = "AI 服务未返回可用回复，请稍后重试。",
+                    kind = LlmErrorKind.BAD_RESPONSE,
+                )
             }
             val content = choices.optJSONObject(0)
                 ?.optJSONObject("message")
@@ -230,13 +268,20 @@ class DeepSeekClient(
                 ?.trim()
                 .orEmpty()
             if (content.isBlank()) {
-                throw LlmException("AI 服务未返回可用回复，请稍后重试。")
+                throw LlmException(
+                    message = "AI 服务未返回可用回复，请稍后重试。",
+                    kind = LlmErrorKind.BAD_RESPONSE,
+                )
             }
             content
         } catch (error: LlmException) {
             throw error
         } catch (error: Exception) {
-            throw LlmException("AI 服务返回格式异常，请稍后重试。", error)
+            throw LlmException(
+                message = "AI 服务返回格式异常，请稍后重试。",
+                cause = error,
+                kind = LlmErrorKind.BAD_RESPONSE,
+            )
         }
     }
 
@@ -257,27 +302,86 @@ class DeepSeekClient(
         }
     }
 
-    private fun networkErrorMessage(error: Exception): String = when (error) {
-        is SocketTimeoutException, is InterruptedIOException ->
-            "连接超时，请检查网络或稍后重试。"
-        else -> "网络错误，无法连接 DeepSeek 服务，请检查网络后重试。"
-    }
-
-    private fun isRetryable(error: LlmException): Boolean {
-        val message = error.message.orEmpty()
-        if (message.contains("额度") ||
-            message.contains("邀请码") ||
-            message.contains("内置服务暂不可用")
-        ) {
-            return false
+    private fun httpException(response: Response, body: String, useRelay: Boolean): LlmException {
+        val code = response.code
+        val relayCode = if (useRelay) RelayErrorParser.codeFromBody(body) else null
+        val kind = when {
+            relayCode == "quota_device" || relayCode == "quota_spend" -> LlmErrorKind.QUOTA
+            relayCode == "invite_used" || relayCode == "invite_invalid" -> LlmErrorKind.AUTH
+            code == 401 || code == 403 -> LlmErrorKind.AUTH
+            code == 402 -> LlmErrorKind.QUOTA
+            code == 429 -> LlmErrorKind.RATE_LIMITED
+            code == 408 -> LlmErrorKind.TIMEOUT
+            code >= 500 -> LlmErrorKind.SERVER_UNAVAILABLE
+            code >= 400 -> LlmErrorKind.BAD_REQUEST
+            else -> LlmErrorKind.UNKNOWN
         }
-        return message.contains("限流") ||
-            message.contains("暂时不可用") ||
-            message.contains("超时") ||
-            message.contains("网络错误")
+        return LlmException(
+            message = httpErrorMessage(code, body, useRelay),
+            kind = kind,
+            retryAfterMillis = response.header("Retry-After")
+                ?.trim()
+                ?.toLongOrNull()
+                ?.times(1000L),
+        )
     }
 
-    private fun backoffMillis(attempt: Int): Long = 800L * attempt
+    private fun networkErrorMessage(error: Exception): String = when (networkErrorKind(error)) {
+        LlmErrorKind.TIMEOUT -> "连接超时，请检查网络或稍后重试。"
+        LlmErrorKind.NETWORK -> "网络错误，无法连接 DeepSeek 服务，请检查网络后重试。"
+        else -> "AI 请求失败，请稍后重试。"
+    }
+
+    /**
+     * 只把“连接阶段失败”视为可安全重试：请求还没送到服务端，重试不会产生重复生成。
+     * 读超时、连接中断等可能已经产生部分结果，交给用户确认后手动重试。
+     */
+    private fun networkErrorKind(error: Exception): LlmErrorKind = when (error) {
+        is ConnectException,
+        is UnknownHostException,
+        is NoRouteToHostException -> LlmErrorKind.NETWORK
+
+        is SocketTimeoutException -> {
+            val message = error.message.orEmpty()
+            if (message.contains("connect", ignoreCase = true)) {
+                LlmErrorKind.NETWORK
+            } else {
+                LlmErrorKind.TIMEOUT
+            }
+        }
+
+        is InterruptedIOException -> LlmErrorKind.TIMEOUT
+        else -> LlmErrorKind.UNKNOWN
+    }
+
+    private fun retryDelayMillis(attempt: Int, error: LlmException): Long =
+        (error.retryAfterMillis ?: (800L * attempt)).coerceIn(0L, 10_000L)
+
+    /**
+     * 执行阻塞式 OkHttp 调用，并让协程取消立即变成 [Call.cancel]。
+     * 仅调用 job.cancel() 无法唤醒阻塞在 socket read 上的线程，旧实现会继续读到完整响应，
+     * 甚至把迟到的片段写进下一次重试的气泡。
+     */
+    private suspend fun <T> executeCall(call: Call, block: suspend (Response) -> T): T {
+        val cancellation = currentCoroutineContext().job.invokeOnCompletion(onCancelling = true) {
+            call.cancel()
+        }
+        try {
+            return call.execute().use { response -> block(response) }
+        } finally {
+            cancellation.dispose()
+        }
+    }
+
+    private fun httpClientFor(config: LlmConfig): OkHttpClient =
+        if (config.thinkingLevel == ThinkingLevel.MAX) {
+            httpClient.newBuilder()
+                .readTimeout(LONG_RUNNING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .callTimeout(LONG_RUNNING_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .build()
+        } else {
+            httpClient
+        }
 
     private fun completionUrl(config: LlmConfig): String {
         if (config.useRelay) {
@@ -292,6 +396,7 @@ class DeepSeekClient(
 
     companion object {
         private const val MAX_ATTEMPTS = 3
+        private const val LONG_RUNNING_TIMEOUT_SECONDS = 300L
         internal val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
 
         fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()

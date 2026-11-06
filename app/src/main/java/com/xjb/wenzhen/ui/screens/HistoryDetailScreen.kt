@@ -22,6 +22,8 @@ fun HistoryDetailScreen(
     onRetry: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    onRegenerateAiComment: (() -> Unit)? = null,
+    isRegeneratingAiComment: Boolean = false,
 ) {
     when {
         record != null -> ResultScreen(
@@ -35,8 +37,11 @@ fun HistoryDetailScreen(
             initialDiagnosis = record.initialDiagnosis,
             messages = record.messages,
             referenceCarePlan = record.referenceCarePlan,
+            notice = record.notice,
             onBack = onBack,
             modifier = modifier,
+            onRegenerateAiComment = onRegenerateAiComment,
+            isRegeneratingAiComment = isRegeneratingAiComment,
         )
         else -> Scaffold(
             modifier = modifier.fillMaxSize(),

@@ -3,6 +3,7 @@ package com.xjb.wenzhen.data.db
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -26,6 +27,31 @@ interface ConsultationDao {
 
     @Insert
     suspend fun insert(entity: ConsultationEntity): Long
+
+    @Query(
+        "SELECT COUNT(*) FROM consultations WHERE caseJson = :caseJson AND createdAt = :createdAt",
+    )
+    suspend fun countBySignature(caseJson: String, createdAt: Long): Int
+
+    /**
+     * 在同一事务里恢复历史备份：按 caseJson + createdAt 去重，任何一条失败都会整体回滚。
+     * @return 实际写入的条数
+     */
+    @Transaction
+    suspend fun restoreAll(records: List<ConsultationEntity>): Int {
+        var inserted = 0
+        records.forEach { record ->
+            if (countBySignature(record.caseJson, record.createdAt) == 0) {
+                insert(record.copy(id = 0L))
+                inserted++
+            }
+        }
+        return inserted
+    }
+
+    /** 重新生成 AI 点评后，只更新同一条记录的评分 JSON 和总分；返回受影响的行数。 */
+    @Query("UPDATE consultations SET scoreJson = :scoreJson, totalScore = :totalScore WHERE id = :id")
+    suspend fun updateScore(id: Long, scoreJson: String, totalScore: Int): Int
 
     @Query("DELETE FROM consultations WHERE id = :id")
     suspend fun deleteById(id: Long)

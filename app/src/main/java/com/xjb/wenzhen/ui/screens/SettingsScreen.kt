@@ -680,9 +680,9 @@ fun SettingsScreen(
                         )
                         Text(
                             text = if (apiSource == ApiSource.BUILTIN) {
-                                "内置服务不包含个人 DeepSeek Key；应用不会上传联系人、相册或设备文件。"
+                                "内置服务不包含个人 DeepSeek Key；应用不会上传联系人、相册或设备文件。本应用仅用于医学生问诊练习，AI 生成内容可能有误，不构成医疗建议或诊断依据；身体不适请及时就医。"
                             } else {
-                                "请使用自己有权限的 DeepSeek API 账号。应用不会上传联系人、相册或设备文件。"
+                                "请使用自己有权限的 DeepSeek API 账号。应用不会上传联系人、相册或设备文件。本应用仅用于医学生问诊练习，AI 生成内容可能有误，不构成医疗建议或诊断依据；身体不适请及时就医。"
                             },
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
