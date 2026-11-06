@@ -102,6 +102,38 @@ class ScoreParserTest {
     }
 
     @Test
+    fun `AI 点评状态随 scoreJson 往返，旧记录默认按成功解析`() {
+        val failed = ScoreResult(
+            totalScore = 50,
+            coverageScore = 20,
+            techniqueScore = 8,
+            communicationScore = 7,
+            diagnosisScore = 10,
+            treatmentScore = 5,
+            coveredPoints = emptyList(),
+            missedQuestions = listOf("遗漏点"),
+            strengths = emptyList(),
+            improvements = emptyList(),
+            correctDiagnosis = "急性阑尾炎",
+            diagnosisExplanation = "",
+            aiCommentStatus = AiCommentStatus.FAILED,
+            aiCommentError = "请求超时",
+        )
+
+        val decoded = ScoreParser.parse(ScoreParser.encode(failed))
+
+        assertEquals(AiCommentStatus.FAILED, decoded.aiCommentStatus)
+        assertEquals(50, decoded.totalScore)
+        // 失败原因只用于当次提示，不写入历史。
+        assertEquals(null, decoded.aiCommentError)
+
+        val legacy = ScoreParser.parse(
+            """{"breakdown": {"questioningCoverage": 30, "techniqueAndOrder": 12, "communication": 12, "diagnosisAccuracy": 16, "treatment": 10}}""",
+        )
+        assertEquals(AiCommentStatus.OK, legacy.aiCommentStatus)
+    }
+
+    @Test
     fun `旧版无治疗分项的记录沿用旧满分不截断`() {
         val raw = """{"totalScore": 92, "breakdown": {"questioningCoverage": 38, "techniqueAndOrder": 18, "communication": 18, "diagnosisAccuracy": 18}}"""
         val result = ScoreParser.parse(raw)

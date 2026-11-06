@@ -44,7 +44,33 @@ interface LlmClient {
         )
 }
 
-class LlmException(message: String, cause: Throwable? = null) : Exception(message, cause)
+/**
+ * 可重试的失败类型。只有明确安全、且未产生有效生成结果的错误才允许自动重试，
+ * 避免“超时后重试”把同一场问诊重复提交给模型。
+ */
+enum class LlmErrorKind {
+    RATE_LIMITED,
+    SERVER_UNAVAILABLE,
+    TIMEOUT,
+    NETWORK,
+    AUTH,
+    QUOTA,
+    BAD_REQUEST,
+    BAD_RESPONSE,
+    UNKNOWN,
+}
+
+class LlmException(
+    message: String,
+    cause: Throwable? = null,
+    val kind: LlmErrorKind = LlmErrorKind.UNKNOWN,
+    val retryAfterMillis: Long? = null,
+) : Exception(message, cause) {
+    val retryable: Boolean
+        get() = kind == LlmErrorKind.RATE_LIMITED ||
+            kind == LlmErrorKind.SERVER_UNAVAILABLE ||
+            kind == LlmErrorKind.NETWORK
+}
 
 sealed interface ConnectionTestResult {
     data object Success : ConnectionTestResult

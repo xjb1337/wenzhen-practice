@@ -46,6 +46,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -70,6 +71,9 @@ import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import com.xjb.wenzhen.util.HistoryExporter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 @Composable
 fun HistoryScreen(
@@ -93,19 +97,35 @@ fun HistoryScreen(
     var selectedDepartment by rememberSaveable { mutableStateOf("全部") }
     var scoreBand by rememberSaveable { mutableStateOf("全部") }
     var dateBand by rememberSaveable { mutableStateOf("全部") }
+    var isFileBusy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri == null) return@rememberLauncherForActivityResult
-        runCatching {
-            val raw = context.contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-                ?: error("无法读取文件")
-            val restored = HistoryExporter.parseBackup(raw)
-            require(restored.isNotEmpty()) { "没有可导入的记录" }
-            onRestore(restored)
-            restored.size
-        }.onSuccess { count ->
-            Toast.makeText(context, "已导入 $count 条记录", Toast.LENGTH_SHORT).show()
-        }.onFailure { error ->
-            Toast.makeText(context, "导入失败：${error.message}", Toast.LENGTH_LONG).show()
+        if (uri == null || isFileBusy) return@rememberLauncherForActivityResult
+        isFileBusy = true
+        scope.launch {
+            runCatching {
+                withContext(Dispatchers.IO) {
+                    val restored = HistoryExporter.readBackup(context, uri)
+                    require(restored.isNotEmpty()) { "没有可导入的记录" }
+                    restored
+                }
+            }.onSuccess { restored ->
+                onRestore(restored)
+                Toast.makeText(context, "已导入 ${restored.size} 条记录", Toast.LENGTH_SHORT).show()
+            }.onFailure { error ->
+                Toast.makeText(context, "导入失败：${error.message}", Toast.LENGTH_LONG).show()
+            }
+            isFileBusy = false
+        }
+    }
+    fun exportFile(create: () -> java.io.File, mime: String, title: String) {
+        if (isFileBusy) return
+        isFileBusy = true
+        scope.launch {
+            runCatching { withContext(Dispatchers.IO) { create() } }
+                .onSuccess { shareFile(context, it, mime, title) }
+                .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+            isFileBusy = false
         }
     }
     if (showClearConfirm) {
@@ -178,27 +198,33 @@ fun HistoryScreen(
                                     text = { Text("导出 Markdown") },
                                     onClick = {
                                         showExportMenu = false
-                                        runCatching { HistoryExporter.writeMarkdown(context, records) }
-                                            .onSuccess { shareFile(context, it, "text/markdown", "导出问诊历史") }
-                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                        exportFile(
+                                            create = { HistoryExporter.writeMarkdown(context, records) },
+                                            mime = "text/markdown",
+                                            title = "导出问诊历史",
+                                        )
                                     },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("导出 PDF") },
                                     onClick = {
                                         showExportMenu = false
-                                        runCatching { HistoryExporter.writePdf(context, records) }
-                                            .onSuccess { shareFile(context, it, "application/pdf", "导出问诊历史") }
-                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                        exportFile(
+                                            create = { HistoryExporter.writePdf(context, records) },
+                                            mime = "application/pdf",
+                                            title = "导出问诊历史",
+                                        )
                                     },
                                 )
                                 DropdownMenuItem(
                                     text = { Text("导出 JSON 备份") },
                                     onClick = {
                                         showExportMenu = false
-                                        runCatching { HistoryExporter.writeJson(context, records) }
-                                            .onSuccess { shareFile(context, it, "application/json", "备份问诊历史") }
-                                            .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
+                                        exportFile(
+                                            create = { HistoryExporter.writeJson(context, records) },
+                                            mime = "application/json",
+                                            title = "备份问诊历史",
+                                        )
                                     },
                                 )
                                 DropdownMenuItem(
@@ -422,6 +448,7 @@ private fun HistoryCard(
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val durationMinutes = remember(record.conversationJson) { conversationDurationMinutes(record) }
     Surface(
         modifier = Modifier
             .fillMaxWidth()
@@ -453,7 +480,7 @@ private fun HistoryCard(
                 Text(
                     text = buildString {
                         append(formatDateTime(record.createdAt))
-                        conversationDurationMinutes(record)?.let { append(" · 用时 $it 分钟") }
+                        durationMinutes?.let { append(" · 用时 $it 分钟") }
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,

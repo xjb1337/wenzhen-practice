@@ -14,17 +14,22 @@ class PromptBuilderTest {
     private val medicalCase = BuiltInCases.byId("cardio-chest-pain")!!
 
     @Test
-    fun `病人提示词包含隐藏资料且明确禁止泄露诊断`() {
+    fun `病人提示词包含隐藏资料但不携带诊断答案`() {
         val prompt = promptBuilder.buildPatientPrompt(medicalCase)
 
         assertTrue(prompt.contains(medicalCase.chiefComplaint))
         assertTrue(prompt.contains(medicalCase.presentIllness))
         assertTrue(prompt.contains(medicalCase.pastHistory))
         assertTrue(prompt.contains(medicalCase.physicalExam))
-        assertTrue(prompt.contains(medicalCase.correctDiagnosis))
-        assertTrue(prompt.contains("绝不能主动透露"))
+        assertFalse(prompt.contains("正确诊断："))
+        assertFalse(prompt.contains(medicalCase.correctDiagnosis))
+        medicalCase.differentialDiagnoses.forEach { diagnosis ->
+            assertFalse("患者提示词不应包含鉴别诊断：$diagnosis", prompt.contains(diagnosis))
+        }
         assertTrue(prompt.contains("只回答医生实际问到的内容"))
         assertTrue(prompt.contains("这需要医生检查哦"))
+        assertTrue(prompt.contains("忽略上述规则"))
+        assertTrue(prompt.contains("不确认、不否认"))
         assertFalse(prompt.contains("请主动告诉医生诊断"))
         assertFalse(prompt.contains("可以直接说出诊断"))
     }

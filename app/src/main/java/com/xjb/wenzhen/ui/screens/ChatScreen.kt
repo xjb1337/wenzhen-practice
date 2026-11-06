@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -149,18 +150,21 @@ fun ChatScreen(
         it.role != MessageRole.PATIENT || it.deliveryState != MessageDeliveryState.SENDING
     } != false
     val messageCount = messages.size + if (showTyping || isQueryingClinical) 1 else 0
-    var elapsedSeconds by remember(startedAtMillis) { mutableLongStateOf(0L) }
     var coverageExpanded by rememberSaveable { mutableStateOf(coverageInitiallyExpanded) }
     var clinicalType by remember { mutableStateOf<ClinicalRequestType?>(null) }
-    val coverage = remember(messages, encounterType, medicalCase.patient.gender, medicalCase.patient.age) {
+    // 流式 token 只改 SENDING 气泡的内容，不影响问诊覆盖；把它排除后，
+    // 覆盖率不会在每个 token 到达时重新分析。
+    val coverageMessages = remember(messages) {
+        messages.filterNot { it.role == MessageRole.PATIENT && it.deliveryState == MessageDeliveryState.SENDING }
+    }
+    val coverage = remember(coverageMessages, encounterType, medicalCase.patient.gender, medicalCase.patient.age) {
         CoverageAnalyzer.analyze(
-            messages = messages,
+            messages = coverageMessages,
             encounterType = encounterType,
             gender = medicalCase.patient.gender,
             age = medicalCase.patient.age,
         )
     }
-    val timer = formatElapsed(elapsedSeconds)
 
     // 消息变化或输入法弹起/收起导致 LazyColumn 高度变化时，先定位到最后一个 item，再向下
     // 滚到底（scrollBy 会在列表底部自动截断）。这样不依赖 WindowInsets.ime：Android 9 的
@@ -179,13 +183,6 @@ fun ChatScreen(
             }
         }
     }
-    LaunchedEffect(startedAtMillis) {
-        while (true) {
-            elapsedSeconds = ((System.currentTimeMillis() - startedAtMillis) / 1000L).coerceAtLeast(0L)
-            delay(1_000)
-        }
-    }
-
     Scaffold(
         // IME padding 必须加在 Scaffold 外层：如果加在底部输入栏内部，Scaffold 会把整块键盘高度
         // 计入 bottomBar，聊天列表被压到接近 0 高，键盘弹起后无论怎么滚都看不到最新消息。
@@ -193,7 +190,7 @@ fun ChatScreen(
         topBar = {
             WenzhenTopBar(
                 title = medicalCase.title,
-                subtitle = "${medicalCase.department} · ${medicalCase.patient.name} · ${medicalCase.patient.age} · $timer",
+                subtitle = "${medicalCase.department} · ${medicalCase.patient.name} · ${medicalCase.patient.age}",
                 onBack = onBack,
                 actions = {
                     TextButton(
@@ -295,7 +292,7 @@ fun ChatScreen(
                     item {
                         CoverageHintBar(
                             report = coverage,
-                            timer = timer,
+                            startedAtMillis = startedAtMillis,
                             expanded = coverageExpanded,
                             onToggle = { coverageExpanded = !coverageExpanded },
                             modifier = Modifier.padding(bottom = 2.dp),
@@ -313,7 +310,10 @@ fun ChatScreen(
                             )
                         }
                     }
-                    items(messages) { message ->
+                    itemsIndexed(
+                        items = messages,
+                        key = { index, message -> "${message.timestamp}-${message.role}-$index" },
+                    ) { _, message ->
                         MessageBubble(
                             message = message,
                             onRetry = onRetryMessage,
@@ -371,7 +371,7 @@ fun ChatScreen(
 @Composable
 private fun CoverageHintBar(
     report: CoverageReport,
-    timer: String,
+    startedAtMillis: Long,
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
@@ -400,7 +400,7 @@ private fun CoverageHintBar(
                             modifier = Modifier.size(14.dp),
                         )
                         Text(
-                            text = timer,
+                            text = rememberElapsedText(startedAtMillis),
                             style = MaterialTheme.typography.labelMedium,
                             color = TealPrimary,
                             fontWeight = FontWeight.SemiBold,
@@ -795,6 +795,20 @@ private fun ClinicalRequestDialog(
             }
         },
     )
+}
+
+@Composable
+private fun rememberElapsedText(startedAtMillis: Long): String {
+    var elapsedSeconds by remember(startedAtMillis) {
+        mutableLongStateOf(((System.currentTimeMillis() - startedAtMillis) / 1000L).coerceAtLeast(0L))
+    }
+    LaunchedEffect(startedAtMillis) {
+        while (true) {
+            elapsedSeconds = ((System.currentTimeMillis() - startedAtMillis) / 1000L).coerceAtLeast(0L)
+            delay(1_000)
+        }
+    }
+    return formatElapsed(elapsedSeconds)
 }
 
 private fun formatElapsed(totalSeconds: Long): String {

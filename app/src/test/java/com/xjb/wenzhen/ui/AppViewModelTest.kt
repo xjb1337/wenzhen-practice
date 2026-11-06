@@ -8,6 +8,7 @@ import androidx.test.core.app.ApplicationProvider
 import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
 import com.xjb.wenzhen.data.api.LlmClient
+import com.xjb.wenzhen.data.api.LlmException
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
@@ -20,6 +21,8 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.settings.AppSettings
+import com.xjb.wenzhen.domain.AiCommentStatus
+import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
 import kotlinx.coroutines.Dispatchers
@@ -27,6 +30,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.runBlocking
@@ -244,6 +248,40 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `取消后旧请求的迟到片段不会写入新气泡`() = runTest(dispatcher) {
+        val client = LateDeltaClient()
+        val vm = viewModel(client)
+
+        vm.sendMessage("第一次提问")
+        advanceUntilIdle()
+        val firstHandler = client.deltaHandler
+        assertNotNull(firstHandler)
+
+        vm.cancelCurrentRequest()
+        vm.sendMessage("第二次提问")
+        advanceUntilIdle()
+        val secondHandler = client.deltaHandler
+        assertNotNull(secondHandler)
+
+        // 模拟旧请求在 cancel 之后才从 socket 读到片段。
+        firstHandler!!.invoke("旧请求的迟到回复")
+        advanceUntilIdle()
+
+        assertFalse(
+            vm.uiState.value.messages.any {
+                it.role == MessageRole.PATIENT && it.content.contains("迟到")
+            },
+        )
+        assertTrue(vm.uiState.value.isPatientTyping)
+
+        secondHandler!!.invoke("第二次回复")
+        advanceUntilIdle()
+        assertEquals("第二次回复", vm.uiState.value.messages.last().content)
+
+        vm.cancelCurrentRequest()
+    }
+
+    @Test
     fun `恢复中断草稿会丢弃半截患者回复并把医生提问标记为可重试`() = runTest(dispatcher) {
         val medicalCase = BuiltInCases.all.first()
         val draft = ConsultationDraftEntity(
@@ -319,7 +357,7 @@ class AppViewModelTest {
         )
         storeViewModel("vm-finish-draft", vm)
 
-        // 病历生成成功、评分生成失败：结果页会展示病历，但本次问诊已经结束。
+        // 病历生成成功、AI 点评 JSON 损坏：分数按本地规则计算并写入历史，之后才清草稿。
         vm.finishConsultation(
             initialDiagnosis = "急性心肌梗死",
             diagnosisBasis = "心电图提示 ST 段抬高",
@@ -335,6 +373,12 @@ class AppViewModelTest {
         val result = vm.uiState.value.currentResult
         assertNotNull(result)
         assertNotNull(result?.referenceCarePlan)
+        assertTrue("评分失败时也必须写入历史", (result?.recordId ?: 0L) > 0L)
+        assertEquals(AiCommentStatus.FAILED, result?.score?.aiCommentStatus)
+        assertTrue(result?.medicalRecord.orEmpty().isNotBlank())
+        val saved = runBlocking(Dispatchers.IO) { db.consultationDao().getById(result!!.recordId) }
+        assertNotNull(saved)
+        assertEquals(result?.score?.totalScore, saved?.totalScore)
         assertNull(vm.uiState.value.draft)
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
 
@@ -344,6 +388,114 @@ class AppViewModelTest {
         waitUntil { vm.uiState.value.draft == null }
         assertNull(vm.uiState.value.draft)
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    @Test
+    fun `评分请求抛出LlmException时按规则分写入历史并清除草稿`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val conversation = listOf(
+            ChatMessage(role = MessageRole.DOCTOR, content = DOCTOR_OPENING_LINE),
+            ChatMessage(role = MessageRole.PATIENT, content = medicalCase.openingLine),
+            ChatMessage(role = MessageRole.DOCTOR, content = "胸口疼了多久了？"),
+            ChatMessage(role = MessageRole.PATIENT, content = "三个小时了。"),
+            ChatMessage(role = MessageRole.DOCTOR, content = "抽烟喝酒吗？"),
+            ChatMessage(role = MessageRole.PATIENT, content = "抽了三十年烟。"),
+        )
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(medicalCase),
+            conversationJson = ConversationJsonCodec.encode(conversation),
+            patientPersonality = "COOPERATIVE",
+            encounterType = "OUTPATIENT",
+            startedAt = 1_000L,
+            updatedAt = 2_000L,
+        )
+        runBlocking(Dispatchers.IO) { db.consultationDraftDao().upsert(draft) }
+        val container = AppContainer(context, overrideLlmClient = SwitchableScoreClient(), overrideDatabase = db)
+        val vm = AppViewModel(
+            container,
+            AppUiState(
+                settings = apiSettings(),
+                activeCase = medicalCase,
+                consultationStartedAt = 1_000L,
+                messages = conversation,
+                draft = draft,
+            ),
+        )
+        storeViewModel("vm-score-exception", vm)
+        val diagnosis = "急性ST段抬高型心肌梗死"
+        val basis = "压榨样胸痛伴大汗，心电图 ST 段抬高"
+        val treatment = "阿司匹林300mg嚼服，尽快PCI"
+
+        vm.finishConsultation(
+            initialDiagnosis = diagnosis,
+            diagnosisBasis = basis,
+            treatmentAnswer = treatment,
+            generateRecord = false,
+        )
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null }
+        assertNull(vm.uiState.value.finishError)
+        waitUntil { vm.uiState.value.draft == null }
+
+        val result = vm.uiState.value.currentResult!!
+        val rule = RuleScoreCalculator.compute(medicalCase, conversation, diagnosis, basis, treatment)
+        val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
+        assertEquals(1, records.size)
+        assertEquals(result.recordId, records.single().id)
+        assertEquals(rule.total, records.single().totalScore)
+        assertEquals(rule.total, result.score.totalScore)
+        assertTrue(rule.total > 0)
+        assertTrue(result.score.aiCommentFailed)
+        assertEquals(
+            AiCommentStatus.FAILED,
+            ScoreParser.parse(records.single().scoreJson).aiCommentStatus,
+        )
+        assertTrue(result.notice.orEmpty().contains("AI 点评生成失败"))
+        assertFalse(result.notice.orEmpty().contains("可返回后重试"))
+        assertTrue(result.score.improvements.none { it.contains("可返回后重试") })
+        assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    @Test
+    fun `重新生成AI点评成功后更新同一条历史记录`() = runTest(dispatcher) {
+        val client = SwitchableScoreClient()
+        val vm = viewModel(client)
+        val medicalCase = BuiltInCases.all.first()
+
+        vm.finishConsultation(
+            initialDiagnosis = medicalCase.correctDiagnosis,
+            diagnosisBasis = medicalCase.auxiliaryExams,
+            treatmentAnswer = "阿司匹林负荷后尽快再灌注",
+            generateRecord = false,
+        )
+        advanceUntilIdle()
+        waitUntil { vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null }
+        val first = vm.uiState.value.currentResult!!
+        assertTrue(first.score.aiCommentFailed)
+        assertTrue(first.recordId > 0L)
+
+        client.failScore = false
+        vm.regenerateAiComment(first.recordId)
+        advanceUntilIdle()
+        waitUntil {
+            vm.uiState.value.regeneratingCommentId == null &&
+                vm.uiState.value.currentResult?.score?.aiCommentFailed == false
+        }
+
+        val updated = vm.uiState.value.currentResult!!
+        assertEquals(first.recordId, updated.recordId)
+        assertEquals(first.score.totalScore, updated.score.totalScore)
+        assertTrue(updated.score.strengths.contains("围绕主诉展开"))
+        assertNull(updated.notice)
+
+        val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
+        assertEquals("重新生成只能更新原记录，不能新增", 1, records.size)
+        assertEquals(first.recordId, records.single().id)
+        val stored = ScoreParser.parse(records.single().scoreJson)
+        assertEquals(AiCommentStatus.OK, stored.aiCommentStatus)
+        assertTrue(stored.strengths.contains("围绕主诉展开"))
+        assertTrue(stored.improvements.contains("继续完善问诊顺序"))
+        assertEquals(first.score.totalScore, records.single().totalScore)
     }
 
     @Test
@@ -513,24 +665,7 @@ class AppViewModelTest {
             temperature: Double,
         ): String {
             check(jsonMode)
-            return """
-                {
-                  "totalScore": 70,
-                  "breakdown": {
-                    "questioningCoverage": 28,
-                    "techniqueAndOrder": 12,
-                    "communication": 12,
-                    "diagnosisAccuracy": 10,
-                    "treatment": 8
-                  },
-                  "coveredPoints": [],
-                  "missedQuestions": ["仍需补充危险因素"],
-                  "strengths": ["围绕主诉展开"],
-                  "improvements": ["继续完善问诊顺序"],
-                  "correctDiagnosis": "模型错误诊断",
-                  "diagnosisExplanation": "依据病例资料解释。"
-                }
-            """.trimIndent()
+            return VALID_SCORE_JSON
         }
 
         override suspend fun stream(
@@ -613,6 +748,53 @@ class AppViewModelTest {
             ConnectionTestResult.Success
     }
 
+    /** 评分请求（jsonMode=true）在 [failScore] 为 true 时抛出限流异常，否则返回合法评分 JSON。 */
+    private class SwitchableScoreClient : LlmClient {
+        @Volatile
+        var failScore: Boolean = true
+
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String {
+            if (!jsonMode) return "收到。"
+            if (failScore) throw LlmException("请求过于频繁，已被限流，请稍后重试。")
+            return VALID_SCORE_JSON
+        }
+
+        override suspend fun stream(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            temperature: Double,
+            onDelta: suspend (String) -> Unit,
+        ): String = error("结束问诊测试不应调用流式接口")
+    }
+
+    /** 保存 onDelta 回调供测试在取消后手动触发，模拟底层阻塞读迟到的片段。 */
+    private class LateDeltaClient : LlmClient {
+        var deltaHandler: (suspend (String) -> Unit)? = null
+            private set
+
+        override suspend fun complete(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            jsonMode: Boolean,
+            temperature: Double,
+        ): String = awaitCancellation()
+
+        override suspend fun stream(
+            config: LlmConfig,
+            messages: List<LlmMessage>,
+            temperature: Double,
+            onDelta: suspend (String) -> Unit,
+        ): String {
+            deltaHandler = onDelta
+            return awaitCancellation()
+        }
+    }
+
     private class BlockingClient : LlmClient {
         override suspend fun complete(
             config: LlmConfig,
@@ -627,5 +809,26 @@ class AppViewModelTest {
             temperature: Double,
             onDelta: suspend (String) -> Unit,
         ): String = awaitCancellation()
+    }
+
+    private companion object {
+        val VALID_SCORE_JSON = """
+            {
+              "totalScore": 70,
+              "breakdown": {
+                "questioningCoverage": 28,
+                "techniqueAndOrder": 12,
+                "communication": 12,
+                "diagnosisAccuracy": 10,
+                "treatment": 8
+              },
+              "coveredPoints": [],
+              "missedQuestions": ["仍需补充危险因素"],
+              "strengths": ["围绕主诉展开"],
+              "improvements": ["继续完善问诊顺序"],
+              "correctDiagnosis": "模型错误诊断",
+              "diagnosisExplanation": "依据病例资料解释。"
+            }
+        """.trimIndent()
     }
 }

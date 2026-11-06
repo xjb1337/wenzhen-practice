@@ -2,16 +2,22 @@ package com.xjb.wenzhen.data.api
 
 import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import okhttp3.OkHttpClient
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.TimeUnit
 
 class DeepSeekClientHttpTest {
     private lateinit var server: MockWebServer
@@ -147,5 +153,60 @@ class DeepSeekClientHttpTest {
         assertEquals(2, server.requestCount)
         assertEquals("/v1/health", server.takeRequest().path)
         assertEquals("/v1/chat/completions", server.takeRequest().path)
+    }
+
+    @Test
+    fun `请求参数错误不重试并标记为不可重试`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(400)
+                .setBody("""{"error":{"message":"invalid model"}}"""),
+        )
+
+        try {
+            client.complete(config(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.BAD_REQUEST, error.kind)
+            assertEquals(false, error.retryable)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `读超时不重试且标记为超时`() = runBlocking {
+        val shortTimeoutClient = DeepSeekClient(
+            httpClient = OkHttpClient.Builder()
+                .readTimeout(150, TimeUnit.MILLISECONDS)
+                .callTimeout(2, TimeUnit.SECONDS)
+                .build(),
+            enforceHttps = false,
+        )
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+
+        try {
+            shortTimeoutClient.complete(config(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.TIMEOUT, error.kind)
+            assertEquals(false, error.retryable)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `取消协程会立即中止阻塞的网络请求`() = runBlocking {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+
+        val job = launch {
+            runCatching {
+                client.complete(config(), messages)
+            }
+        }
+        delay(200)
+        withTimeout(3_000) {
+            job.cancelAndJoin()
+        }
+        assertEquals(1, server.requestCount)
     }
 }

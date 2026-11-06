@@ -12,6 +12,12 @@ class ConsultationRepository(private val dao: ConsultationDao) {
 
     suspend fun save(entity: ConsultationEntity): Long = dao.insert(entity)
 
+    /** 事务式恢复历史：重复记录（caseJson + createdAt 相同）会跳过。 */
+    suspend fun restoreAll(records: List<ConsultationEntity>): Int = dao.restoreAll(records)
+
+    suspend fun updateScore(id: Long, scoreJson: String, totalScore: Int): Int =
+        dao.updateScore(id, scoreJson, totalScore)
+
     suspend fun delete(id: Long) = dao.deleteById(id)
 
     suspend fun clear() = dao.deleteAll()

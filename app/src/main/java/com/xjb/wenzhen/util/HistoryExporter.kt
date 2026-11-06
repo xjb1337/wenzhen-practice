@@ -3,9 +3,11 @@ package com.xjb.wenzhen.util
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
+import android.net.Uri
 import com.xjb.wenzhen.data.db.ConsultationEntity
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -16,6 +18,12 @@ import java.util.Locale
  */
 object HistoryExporter {
     private const val FORMAT_VERSION = 1
+
+    /** 导入备份的大小上限，避免把超大文件整段读进内存。 */
+    const val MAX_IMPORT_BYTES = 5 * 1024 * 1024
+
+    /** 单次导入的记录条数上限。 */
+    const val MAX_IMPORT_RECORDS = 5_000
 
     fun toMarkdown(records: List<ConsultationEntity>): String {
         val header = "# 问诊历史记录\n\n共 ${records.size} 条，导出时间：${formatTime(System.currentTimeMillis())}\n"
@@ -72,6 +80,7 @@ object HistoryExporter {
             if (start >= 0 && end > start) JSONObject(text.substring(start, end + 1)) else JSONObject(text)
         }
         val array = root.optJSONArray("records") ?: JSONArray()
+        require(array.length() <= MAX_IMPORT_RECORDS) { "备份记录超过 $MAX_IMPORT_RECORDS 条，请拆分后再导入" }
         return buildList {
             for (index in 0 until array.length()) {
                 val item = array.optJSONObject(index) ?: continue
@@ -100,6 +109,27 @@ object HistoryExporter {
                 )
             }
         }
+    }
+
+    /**
+     * 从 content Uri 读取并解析备份。读取在调用方指定的 IO 线程执行，
+     * 超过 [MAX_IMPORT_BYTES] 时立即失败，不会把整个文件读入内存。
+     */
+    fun readBackup(context: Context, uri: Uri): List<ConsultationEntity> {
+        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(16 * 1024)
+            var total = 0
+            while (true) {
+                val read = input.read(buffer)
+                if (read < 0) break
+                total += read
+                require(total <= MAX_IMPORT_BYTES) { "备份文件超过 5 MB，无法导入" }
+                output.write(buffer, 0, read)
+            }
+            output.toByteArray()
+        } ?: error("无法读取文件")
+        return parseBackup(String(bytes, Charsets.UTF_8))
     }
 
     fun writeJson(context: Context, records: List<ConsultationEntity>): File =

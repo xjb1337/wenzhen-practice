@@ -11,6 +11,20 @@ data class ScoreEvidence(
     val messageIndexes: List<Int>,
 )
 
+/**
+ * AI 点评（优点、改进建议、诊断解析）是否生成成功。分数始终来自本地规则分，
+ * 点评失败只影响文字反馈，不影响分数和入库。旧记录没有该字段，按 OK 解析。
+ */
+enum class AiCommentStatus {
+    OK,
+    FAILED;
+
+    companion object {
+        fun from(value: String?): AiCommentStatus =
+            entries.firstOrNull { it.name.equals(value?.trim(), ignoreCase = true) } ?: OK
+    }
+}
+
 data class ScoreResult(
     val totalScore: Int,
     val coverageScore: Int,
@@ -26,7 +40,12 @@ data class ScoreResult(
     val treatmentScore: Int = 0,
     val isLegacy: Boolean = false,
     val evidence: List<ScoreEvidence> = emptyList(),
+    val aiCommentStatus: AiCommentStatus = AiCommentStatus.OK,
+    /** 本次 AI 点评失败的原因，只用于当次界面提示，不写入 scoreJson。 */
+    val aiCommentError: String? = null,
 ) {
+    val aiCommentFailed: Boolean get() = aiCommentStatus == AiCommentStatus.FAILED
+
     val coverageMax: Int get() = if (isLegacy) 40 else 35
     val techniqueMax: Int get() = if (isLegacy) 20 else 15
     val communicationMax: Int get() = if (isLegacy) 20 else 15
@@ -106,6 +125,7 @@ object ScoreParser {
             treatmentScore = treatmentValue,
             isLegacy = legacy,
             evidence = readEvidence(json),
+            aiCommentStatus = AiCommentStatus.from(json.optString("aiCommentStatus")),
         )
     }
 
@@ -124,6 +144,7 @@ object ScoreParser {
         put("improvements", JSONArray(score.improvements))
         put("correctDiagnosis", score.correctDiagnosis)
         put("diagnosisExplanation", score.diagnosisExplanation)
+        put("aiCommentStatus", score.aiCommentStatus.name)
         put("questionEvidence", JSONArray().apply {
             score.evidence.forEach { item ->
                 put(JSONObject().apply {

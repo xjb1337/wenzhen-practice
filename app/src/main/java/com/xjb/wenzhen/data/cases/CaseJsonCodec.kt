@@ -36,6 +36,10 @@ object CaseJsonCodec {
         put("differentialDiagnoses", JSONArray(medicalCase.differentialDiagnoses))
         put("treatmentPlan", medicalCase.treatmentPlan)
         put("isAiGenerated", medicalCase.isAiGenerated)
+        // 只在有别名时写入，保证没有别名的病例 caseJson 与旧版本逐字一致（草稿清理按 caseJson 比对）。
+        if (medicalCase.diagnosisAliases.isNotEmpty()) {
+            put("diagnosisAliases", JSONArray(medicalCase.diagnosisAliases))
+        }
     }.toString()
 
     fun decode(raw: String): MedicalCase {
@@ -98,6 +102,7 @@ object CaseJsonCodec {
             differentialDiagnoses = differentialDiagnoses,
             isAiGenerated = json.optBoolean("isAiGenerated", false),
             treatmentPlan = json.readText("treatmentPlan", "治疗方案"),
+            diagnosisAliases = readStringList(json, "diagnosisAliases", "诊断别名").distinct(),
         )
 
         val missing = buildList {

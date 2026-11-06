@@ -38,6 +38,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
@@ -99,6 +100,8 @@ fun ResultScreen(
     messages: List<ChatMessage> = emptyList(),
     referenceCarePlan: ReferenceCarePlan? = null,
     notice: String? = null,
+    onRegenerateAiComment: (() -> Unit)? = null,
+    isRegeneratingAiComment: Boolean = false,
 ) {
     val tabs = availableResultTabs(hasRecord = medicalRecord.isNotBlank(), hasTranscript = messages.isNotEmpty())
     var selectedTabName by rememberSaveable { mutableStateOf(initialTab.name) }
@@ -202,6 +205,8 @@ fun ResultScreen(
                     score = score,
                     referenceCarePlan = referenceCarePlan,
                     modifier = Modifier.weight(1f),
+                    onRegenerateAiComment = onRegenerateAiComment,
+                    isRegeneratingAiComment = isRegeneratingAiComment,
                 )
                 return@Column
             }
@@ -240,6 +245,8 @@ fun ResultScreen(
                     score = score,
                     referenceCarePlan = referenceCarePlan,
                     modifier = Modifier.weight(1f),
+                    onRegenerateAiComment = onRegenerateAiComment,
+                    isRegeneratingAiComment = isRegeneratingAiComment,
                 )
                 ResultTab.TRANSCRIPT -> TranscriptTab(messages = messages, modifier = Modifier.weight(1f))
             }
@@ -273,6 +280,7 @@ private fun ResultHeader(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     HeaderTag(department)
                     HeaderTag(difficulty)
+                    HeaderTag("AI 生成")
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -424,12 +432,22 @@ private fun ReviewTab(
     score: ScoreResult,
     referenceCarePlan: ReferenceCarePlan?,
     modifier: Modifier = Modifier,
+    onRegenerateAiComment: (() -> Unit)? = null,
+    isRegeneratingAiComment: Boolean = false,
 ) {
     LazyColumn(
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 16.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
+        if (score.aiCommentFailed) {
+            item {
+                AiCommentFailedCard(
+                    onRegenerate = onRegenerateAiComment,
+                    isRegenerating = isRegeneratingAiComment,
+                )
+            }
+        }
         item {
             Surface(
                 modifier = Modifier.fillMaxWidth(),
@@ -599,6 +617,42 @@ private fun ReviewTab(
 }
 
 @Composable
+private fun AiCommentFailedCard(
+    onRegenerate: (() -> Unit)?,
+    isRegenerating: Boolean,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.errorContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text(
+                text = "AI 点评生成失败",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            Text(
+                text = "分数由本地规则计算，已保存到历史记录；优点、改进建议和诊断解析暂缺。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+            )
+            if (onRegenerate != null) {
+                OutlinedButton(
+                    onClick = onRegenerate,
+                    enabled = !isRegenerating,
+                ) {
+                    Text(if (isRegenerating) "正在重新生成…" else "重新生成 AI 点评")
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ScoreMetric(
     label: String,
     value: Int,
@@ -738,7 +792,7 @@ private fun ReferenceCarePlanCard(
             )
 
             Text(
-                text = "本方案不补写病例之外的信息；具体诊疗仍须结合患者实际情况并由带教老师确认。",
+                text = "本方案由 AI 依据病例资料生成，不补写病例之外的信息；药物与剂量仅用于教学复盘，请勿直接用于真实患者，具体诊疗须由带教老师确认。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

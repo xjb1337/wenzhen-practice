@@ -9,6 +9,8 @@ import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -97,6 +99,25 @@ fun WenzhenApp(viewModel: AppViewModel) {
                 }
             }
         }
+    }
+
+    if (!uiState.settings.privacyAccepted) {
+        AlertDialog(
+            onDismissRequest = { /* 必须明确同意后才能使用 */ },
+            title = { Text("隐私与 AI 使用说明") },
+            text = {
+                Text(
+                    "本应用用于医学生问诊练习。问诊对话、病例生成、查体/检查请求、病历和评分会发送到你配置的 AI 服务；" +
+                        "使用内置服务时，请求还会经过中转服务器并携带随机设备标识。AI 生成内容可能有误，不构成医疗建议。" +
+                        "请勿输入真实患者身份信息或敏感个人资料。",
+                )
+            },
+            confirmButton = {
+                Button(onClick = viewModel::acceptPrivacyNotice) {
+                    Text("同意并继续")
+                }
+            },
+        )
     }
 
     Scaffold(
@@ -262,6 +283,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         onBack = { navController.popBackStack() },
                         onSubmit = viewModel::finishConsultation,
                         initialGenerateRecord = uiState.settings.generateRecord,
+                        thinkingLevel = uiState.settings.thinkingLevel,
                         isSubmitting = uiState.isFinishing,
                         errorMessage = uiState.finishError,
                         onDismissError = viewModel::clearFinishError,
@@ -295,6 +317,12 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         referenceCarePlan = result.referenceCarePlan,
                         notice = result.notice,
                         onBack = { navController.popBackStack() },
+                        onRegenerateAiComment = if (result.recordId > 0L) {
+                            { viewModel.regenerateAiComment(result.recordId) }
+                        } else {
+                            null
+                        },
+                        isRegeneratingAiComment = uiState.regeneratingCommentId == result.recordId,
                     )
                 }
             }
@@ -315,6 +343,11 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         if (recordId != null) viewModel.loadHistoryDetail(recordId)
                     },
                     onBack = { navController.popBackStack() },
+                    onRegenerateAiComment = visibleRecord?.let { record ->
+                        { viewModel.regenerateAiComment(record.recordId) }
+                    },
+                    isRegeneratingAiComment = visibleRecord != null &&
+                        uiState.regeneratingCommentId == visibleRecord.recordId,
                 )
             }
         }

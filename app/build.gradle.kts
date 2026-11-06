@@ -4,8 +4,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 9
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.3"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 13
+val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.7"
 val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 
 android {
@@ -37,7 +37,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             if (releaseStoreFile != null) {
                 signingConfig = signingConfigs.getByName("release")
             }
@@ -96,7 +97,7 @@ dependencies {
     implementation("androidx.room:room-runtime:2.6.1")
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
 
     implementation("androidx.compose.ui:ui")
     implementation("androidx.compose.ui:ui-tooling-preview")

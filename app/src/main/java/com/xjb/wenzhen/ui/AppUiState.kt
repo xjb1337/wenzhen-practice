@@ -59,6 +59,8 @@ data class AppUiState(
     val finishError: String? = null,
     val isFinishing: Boolean = false,
     val currentResult: ResultViewData? = null,
+    /** 正在重新生成 AI 点评的历史记录 id；为 null 表示没有进行中的请求。 */
+    val regeneratingCommentId: Long? = null,
     val history: List<ConsultationEntity> = emptyList(),
     val historyQuery: String = "",
     val historyLoading: Boolean = true,
@@ -91,8 +93,8 @@ data class AppUiState(
     val builtInCaseCount: Int
         get() = BuiltInCases.all.size
 
-    val stats: StatsSummary
-        get() = StatsCalculator.calculate(
+    val stats: StatsSummary by lazy {
+        StatsCalculator.calculate(
             history.map { entity ->
                 val score = runCatching { ScoreParser.parse(entity.scoreJson) }.getOrNull()
                 StatsRecord(
@@ -104,6 +106,7 @@ data class AppUiState(
                 )
             }
         )
+    }
 
     val filteredHistory: List<ConsultationEntity>
         get() = historyQuery.trim().takeIf { it.isNotEmpty() }?.let { query ->
