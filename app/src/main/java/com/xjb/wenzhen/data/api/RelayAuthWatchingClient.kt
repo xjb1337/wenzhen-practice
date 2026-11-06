@@ -27,7 +27,7 @@ class RelayAuthWatchingClient(
     } catch (error: CancellationException) {
         throw error
     } catch (error: LlmException) {
-        notifyIfAuthFailure(config, error)
+        notifyIfAuthFailure(config, error.kind)
         throw error
     }
 
@@ -41,22 +41,28 @@ class RelayAuthWatchingClient(
     } catch (error: CancellationException) {
         throw error
     } catch (error: LlmException) {
-        notifyIfAuthFailure(config, error)
+        notifyIfAuthFailure(config, error.kind)
         throw error
     }
 
-    override suspend fun testConnection(config: LlmConfig): ConnectionTestResult = try {
-        delegate.testConnection(config)
-    } catch (error: CancellationException) {
-        throw error
-    } catch (error: LlmException) {
-        notifyIfAuthFailure(config, error)
-        throw error
+    override suspend fun testConnection(config: LlmConfig): ConnectionTestResult {
+        val result = try {
+            delegate.testConnection(config)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: LlmException) {
+            notifyIfAuthFailure(config, error.kind)
+            throw error
+        }
+        if (result is ConnectionTestResult.Failure) {
+            notifyIfAuthFailure(config, result.kind)
+        }
+        return result
     }
 
-    private fun notifyIfAuthFailure(config: LlmConfig, error: LlmException) {
+    private fun notifyIfAuthFailure(config: LlmConfig, kind: LlmErrorKind?) {
         if (config.useRelay &&
-            error.kind == LlmErrorKind.AUTH &&
+            kind == LlmErrorKind.AUTH &&
             config.apiKey.isNotBlank()
         ) {
             _invalidated.tryEmit(config.apiKey)

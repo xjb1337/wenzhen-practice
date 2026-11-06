@@ -209,8 +209,9 @@ class DeepSeekClientHttpTest {
 
         val result = client.testConnection(relayConfig())
 
-        assertTrue(result is ConnectionTestResult.Failure)
-        assertTrue((result as ConnectionTestResult.Failure).message.contains("重新兑换"))
+        val failure = result as ConnectionTestResult.Failure
+        assertEquals("AUTH", failure.kind?.name)
+        assertTrue(failure.message.contains("重新兑换"))
         assertEquals(2, server.requestCount)
         assertEquals("/v1/health", server.takeRequest().path)
         assertEquals("/v1/chat/completions", server.takeRequest().path)

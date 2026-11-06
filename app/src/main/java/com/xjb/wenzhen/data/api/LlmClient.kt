@@ -75,5 +75,8 @@ class LlmException(
 
 sealed interface ConnectionTestResult {
     data object Success : ConnectionTestResult
-    data class Failure(val message: String) : ConnectionTestResult
+    data class Failure(
+        val message: String,
+        val kind: LlmErrorKind? = null,
+    ) : ConnectionTestResult
 }

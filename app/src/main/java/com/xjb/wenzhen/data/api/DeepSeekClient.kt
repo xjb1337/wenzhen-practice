@@ -183,7 +183,10 @@ class DeepSeekClient(
             val request = try {
                 request(config, payload, accept = "application/json")
             } catch (error: LlmException) {
-                return@withContext ConnectionTestResult.Failure(error.message ?: "接口地址无效。")
+                return@withContext ConnectionTestResult.Failure(
+                    message = error.message ?: "接口地址无效。",
+                    kind = error.kind,
+                )
             }
             try {
                 httpClient.newCall(request).execute().use { response ->
@@ -192,7 +195,8 @@ class DeepSeekClient(
                         ConnectionTestResult.Success
                     } else {
                         ConnectionTestResult.Failure(
-                            httpErrorMessage(response.code, body, config.useRelay),
+                            message = httpErrorMessage(response.code, body, config.useRelay),
+                            kind = httpErrorKind(response.code, body, config.useRelay),
                         )
                     }
                 }
@@ -305,8 +309,19 @@ class DeepSeekClient(
 
     private fun httpException(response: Response, body: String, useRelay: Boolean): LlmException {
         val code = response.code
+        return LlmException(
+            message = httpErrorMessage(code, body, useRelay),
+            kind = httpErrorKind(code, body, useRelay),
+            retryAfterMillis = response.header("Retry-After")
+                ?.trim()
+                ?.toLongOrNull()
+                ?.times(1000L),
+        )
+    }
+
+    private fun httpErrorKind(code: Int, body: String, useRelay: Boolean): LlmErrorKind {
         val relayCode = if (useRelay) RelayErrorParser.codeFromBody(body) else null
-        val kind = when {
+        return when {
             relayCode == "quota_device" || relayCode == "quota_spend" -> LlmErrorKind.QUOTA
             relayCode == "invite_used" || relayCode == "invite_invalid" -> LlmErrorKind.AUTH
             relayCode == "relay_disabled" -> LlmErrorKind.SERVICE_DISABLED
@@ -318,14 +333,6 @@ class DeepSeekClient(
             code >= 400 -> LlmErrorKind.BAD_REQUEST
             else -> LlmErrorKind.UNKNOWN
         }
-        return LlmException(
-            message = httpErrorMessage(code, body, useRelay),
-            kind = kind,
-            retryAfterMillis = response.header("Retry-After")
-                ?.trim()
-                ?.toLongOrNull()
-                ?.times(1000L),
-        )
     }
 
     private fun networkErrorMessage(error: Exception): String = when (networkErrorKind(error)) {
