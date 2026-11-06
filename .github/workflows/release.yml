@@ -64,17 +64,21 @@ jobs:
           echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
       - name: Test and build signed APK
         env:
+          VERSION: ${{ inputs.version }}
+          VERSION_CODE: ${{ inputs.version_code }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "version 必须为 X.Y.Z"; exit 1; }
+          [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || { echo "version_code 必须为整数"; exit 1; }
           chmod +x gradlew
           # 分开执行：同一个 Gradle 调用里 testDebugUnitTest + assembleRelease 会因
           # org.gradle.parallel=true 让 Robolectric/Room 测试与 release dex/lint 任务争抢
           # 2 核 runner，曾出现 testDebugUnitTest 卡住 28 分钟直到 job 超时。
           ./gradlew lintRelease --stacktrace
           ./gradlew testDebugUnitTest --stacktrace
-          ./gradlew assembleRelease -PversionName="${{ inputs.version }}" -PversionCode="${{ inputs.version_code }}" --stacktrace
+          ./gradlew assembleRelease -PversionName="$VERSION" -PversionCode="$VERSION_CODE" --stacktrace
       - name: Verify signature and checksum
         env:
           EXPECTED_CERT: ${{ secrets.ANDROID_EXPECTED_CERT_SHA256 }}
@@ -129,13 +133,14 @@ jobs:
           cat dist/update.json
       - name: Publish release
         env:
+          VERSION: ${{ inputs.version }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NOTES: ${{ inputs.release_notes }}
           GH_REPO: ${{ github.repository }}
         run: |
-          TAG="v${{ inputs.version }}"
+          TAG="v$VERSION"
           TITLE="问诊练习 $TAG"
-          printf '%s\n\nSHA-256: `%s`\n' "${NOTES:-版本 ${{ inputs.version }}}" "$(cut -d' ' -f1 dist/wenzhen-practice.apk.sha256)" > "$RUNNER_TEMP/notes.md"
+          printf '%s\n\nSHA-256: `%s`\n' "${NOTES:-版本 $VERSION}" "$(cut -d' ' -f1 dist/wenzhen-practice.apk.sha256)" > "$RUNNER_TEMP/notes.md"
           set +e
           for attempt in 1 2 3 4 5; do
             echo "尝试发布（第 $attempt 次）"
