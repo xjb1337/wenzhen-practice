@@ -998,13 +998,13 @@ class AppViewModel(
                 deviceId = deviceId,
             )) {
                 is RedeemResult.Success -> {
-                    val updated = currentSettings.copy(
+                    // 兑换期间用户可能已修改主题等设置，成功分支必须基于最新快照合并。
+                    val updated = _uiState.value.settings.copy(
                         apiSource = ApiSource.BUILTIN,
                         deviceId = deviceId,
                         sessionToken = result.sessionToken,
                         sessionExpiresAt = result.expiresAt,
-                        relayBaseUrl = currentSettings.relayBaseUrl.trim()
-                            .ifBlank { AppSettings.RELAY_BASE_URL },
+                        relayBaseUrl = AppSettings.RELAY_BASE_URL,
                     )
                     try {
                         container.settingsRepository.save(updated)

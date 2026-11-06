@@ -32,6 +32,8 @@ import com.xjb.wenzhen.domain.AiCommentStatus
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.ui.theme.AppTheme
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -219,6 +221,23 @@ class AppViewModelTest {
         runCatching { container.llmClient.testConnection(staleConfig) }
         advanceUntilIdle()
 
+        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
+    }
+
+    @Test
+    fun `兑换期间修改的主题不会被旧快照覆盖`() = runTest(dispatcher) {
+        val redeemer = BlockingInviteRedeemer()
+        val vm = viewModel(SuccessClient(), settings = apiSettings(), inviteRedeemer = redeemer)
+
+        vm.redeemInvite("WZ-TEST")
+        runCurrent()
+        vm.setTheme(AppTheme.CLINICAL_BLUE)
+        advanceUntilIdle()
+
+        redeemer.result.complete(RedeemResult.Success("new-session", expiresAt = 123_000L))
+        advanceUntilIdle()
+
+        assertEquals(AppTheme.CLINICAL_BLUE, vm.uiState.value.settings.theme)
         assertEquals("new-session", vm.uiState.value.settings.sessionToken)
     }
 
@@ -908,6 +927,13 @@ class AppViewModelTest {
     ) : InviteRedeemer {
         override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
             result
+    }
+
+    private class BlockingInviteRedeemer : InviteRedeemer {
+        val result = CompletableDeferred<RedeemResult>()
+
+        override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
+            result.await()
     }
 
     private companion object {
