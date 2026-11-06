@@ -266,6 +266,10 @@ class AppViewModelTest {
             generateRecord = true,
         )
         advanceUntilIdle()
+        waitUntil {
+            vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null
+        }
+        assertNull(vm.uiState.value.finishError)
         waitUntil { vm.uiState.value.draft == null }
 
         val result = vm.uiState.value.currentResult

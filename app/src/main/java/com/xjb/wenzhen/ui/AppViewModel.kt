@@ -1242,6 +1242,9 @@ class AppViewModel(
                 container.consultationDraftRepository.clear()
                 _uiState.update { it.copy(draft = null) }
             } else {
+                // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
+                // 再把读取到的旧草稿快照写回状态，否则首页会误报存在未完成问诊。
+                if (!draftPersistenceEnabled) return@launch
                 _uiState.update { it.copy(draft = draft) }
             }
         }
