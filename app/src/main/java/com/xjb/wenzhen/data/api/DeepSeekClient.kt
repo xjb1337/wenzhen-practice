@@ -62,7 +62,7 @@ class DeepSeekClient(
                 throw error
             } catch (error: LlmException) {
                 lastError = error
-                if (attempt < MAX_ATTEMPTS && error.retryable) {
+                if (attempt < MAX_ATTEMPTS && shouldRetry(config, error)) {
                     delay(retryDelayMillis(attempt, error))
                 } else {
                     throw error
@@ -77,7 +77,7 @@ class DeepSeekClient(
                     kind = networkErrorKind(error),
                 )
                 lastError = typed
-                if (attempt < MAX_ATTEMPTS && typed.retryable) {
+                if (attempt < MAX_ATTEMPTS && shouldRetry(config, typed)) {
                     delay(retryDelayMillis(attempt, typed))
                 } else {
                     throw typed
@@ -309,6 +309,7 @@ class DeepSeekClient(
         val kind = when {
             relayCode == "quota_device" || relayCode == "quota_spend" -> LlmErrorKind.QUOTA
             relayCode == "invite_used" || relayCode == "invite_invalid" -> LlmErrorKind.AUTH
+            relayCode == "relay_disabled" -> LlmErrorKind.SERVICE_DISABLED
             code == 401 || code == 403 -> LlmErrorKind.AUTH
             code == 402 -> LlmErrorKind.QUOTA
             code == 429 -> LlmErrorKind.RATE_LIMITED
@@ -354,6 +355,13 @@ class DeepSeekClient(
         is InterruptedIOException -> LlmErrorKind.TIMEOUT
         else -> LlmErrorKind.UNKNOWN
     }
+
+    /**
+     * Relay 的 5xx 可能已把请求转给上游并记账，重试会造成重复扣额度，因此不自动重试；
+     * NETWORK（连接阶段失败，请求未到服务端）和 RATE_LIMITED 仍按原策略重试。
+     */
+    private fun shouldRetry(config: LlmConfig, error: LlmException): Boolean =
+        error.retryable && !(config.useRelay && error.kind == LlmErrorKind.SERVER_UNAVAILABLE)
 
     private fun retryDelayMillis(attempt: Int, error: LlmException): Long =
         (error.retryAfterMillis ?: (800L * attempt)).coerceIn(0L, 10_000L)

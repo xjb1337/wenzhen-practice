@@ -51,6 +51,7 @@ interface LlmClient {
 enum class LlmErrorKind {
     RATE_LIMITED,
     SERVER_UNAVAILABLE,
+    SERVICE_DISABLED,
     TIMEOUT,
     NETWORK,
     AUTH,

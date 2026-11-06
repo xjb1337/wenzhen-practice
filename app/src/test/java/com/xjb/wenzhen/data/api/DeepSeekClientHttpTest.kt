@@ -80,6 +80,60 @@ class DeepSeekClientHttpTest {
     }
 
     @Test
+    fun `内置服务 5xx 不自动重试以避免重复扣额度`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(502)
+                .setBody("""{"error":{"message":"bad gateway"}}"""),
+        )
+
+        try {
+            client.complete(relayConfig(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.SERVER_UNAVAILABLE, error.kind)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `非内置服务 502 仍重试三次`() = runBlocking {
+        repeat(3) {
+            server.enqueue(
+                MockResponse()
+                    .setResponseCode(502)
+                    .setBody("""{"error":{"message":"bad gateway"}}"""),
+            )
+        }
+
+        try {
+            client.complete(config(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.SERVER_UNAVAILABLE, error.kind)
+            assertEquals(3, server.requestCount)
+        }
+    }
+
+    @Test
+    fun `内置服务关闭错误不重试并映射为服务不可用`() = runBlocking {
+        server.enqueue(
+            MockResponse()
+                .setResponseCode(503)
+                .setBody("""{"error":{"code":"relay_disabled"}}"""),
+        )
+
+        try {
+            client.complete(relayConfig(), messages)
+            fail("应当抛出 LlmException")
+        } catch (error: LlmException) {
+            assertEquals(LlmErrorKind.SERVICE_DISABLED, error.kind)
+            assertEquals("内置服务暂不可用", error.message)
+            assertEquals(1, server.requestCount)
+        }
+    }
+
+    @Test
     fun `流式响应逐段回调并拼接完整内容`() = runBlocking {
         server.enqueue(
             MockResponse()
