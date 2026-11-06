@@ -2,7 +2,7 @@
 
 一个面向中国医学生的原生 Android 问诊训练应用。使用 Kotlin、Jetpack Compose 与 Material3 构建，包名为 `com.xjb.wenzhen`。应用通过标准化病人病例模拟问诊，在结束对话后生成规范大病历并提供结构化点评。
 
-当前版本为 v1.3.7，`versionCode` 为 13。
+当前版本为 v1.3.8，`versionCode` 为 14。
 
 ## 功能
 
