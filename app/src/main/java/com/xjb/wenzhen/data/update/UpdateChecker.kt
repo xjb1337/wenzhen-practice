@@ -90,6 +90,9 @@ class UpdateChecker(
         }
         val directory = File(appContext.cacheDir, "updates").apply { mkdirs() }
         val target = File(directory, "wenzhen-practice-${update.versionCode}.apk")
+        directory.listFiles()?.forEach { existing ->
+            if (existing != target) existing.delete()
+        }
         val partial = File(directory, "${target.name}.part")
         partial.delete()
         onProgress(0)
@@ -108,6 +111,7 @@ class UpdateChecker(
                 val totalBytes = body.contentLength()
                 val digest = MessageDigest.getInstance("SHA-256")
                 var downloaded = 0L
+                var lastProgress = 0
                 body.byteStream().use { input ->
                     partial.outputStream().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
@@ -121,7 +125,11 @@ class UpdateChecker(
                             digest.update(buffer, 0, read)
                             output.write(buffer, 0, read)
                             if (totalBytes > 0) {
-                                onProgress(((downloaded * 100) / totalBytes).toInt().coerceIn(0, 100))
+                                val percent = ((downloaded * 100) / totalBytes).toInt().coerceIn(0, 100)
+                                if (percent > lastProgress) {
+                                    lastProgress = percent
+                                    onProgress(percent)
+                                }
                             }
                         }
                     }

@@ -6,7 +6,6 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.ui.theme.AppTheme
-import java.util.UUID
 
 internal fun normalizeModel(name: String?): String {
     val normalized = name?.trim().orEmpty()
@@ -22,11 +21,6 @@ class SettingsRepository(
     private val preferencesOverride: SharedPreferences? = null,
 ) {
     private val appContext = context.applicationContext
-    /** 设备标识不加密保存：即使加密存储损坏或重装 Keystore，也不会让中转额度“换设备”。 */
-    private val deviceIdPreferences = appContext.getSharedPreferences(
-        DEVICE_ID_PREFERENCES_NAME,
-        Context.MODE_PRIVATE,
-    )
 
     /**
      * 延迟初始化：避免 Application.onCreate / AppContainer 构造时在主线程加载 Keystore。
@@ -50,10 +44,9 @@ class SettingsRepository(
     }
 
     fun load(): AppSettings {
-        val stableDeviceId = stableDeviceId()
-        val prefs = preferences ?: return AppSettings(deviceId = stableDeviceId)
+        val prefs = preferences ?: return AppSettings()
         return runCatching {
-            val loaded = AppSettings(
+            AppSettings(
                 apiKey = prefs.getString(KEY_API_KEY, "").orEmpty(),
                 model = normalizeModel(prefs.getString(KEY_MODEL, AppSettings.MODEL_FLASH)),
                 baseUrl = prefs.getString(KEY_BASE_URL, AppSettings.DEFAULT_BASE_URL)
@@ -63,25 +56,14 @@ class SettingsRepository(
                 generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
                 offlineMode = prefs.getBoolean(KEY_OFFLINE_MODE, false),
                 theme = AppTheme.from(prefs.getString(KEY_THEME, null)),
-                apiSource = ApiSource.from(prefs.getString(KEY_API_SOURCE, null)),
-                deviceId = prefs.getString(KEY_DEVICE_ID, "").orEmpty().ifBlank { stableDeviceId },
-                sessionToken = prefs.getString(KEY_SESSION_TOKEN, "").orEmpty(),
-                sessionExpiresAt = prefs.getLong(KEY_SESSION_EXPIRES_AT, 0L).takeIf { it > 0L },
-                relayBaseUrl = AppSettings.RELAY_BASE_URL,
                 privacyAccepted = prefs.getBoolean(KEY_PRIVACY_ACCEPTED, false),
             )
-            if (prefs.getString(KEY_DEVICE_ID, "").orEmpty().isBlank()) {
-                prefs.edit().putString(KEY_DEVICE_ID, stableDeviceId).apply()
-            }
-            loaded
-        }.getOrDefault(AppSettings(deviceId = stableDeviceId))
+        }.getOrDefault(AppSettings())
     }
 
     fun save(settings: AppSettings) {
         val prefs = preferences
             ?: throw IllegalStateException("本机加密存储初始化失败，请重启应用后重试。")
-        val deviceId = settings.deviceId.trim().ifBlank { stableDeviceId() }
-        deviceIdPreferences.edit().putString(KEY_STABLE_DEVICE_ID, deviceId).apply()
         val saved = prefs.edit()
             .putString(KEY_API_KEY, settings.apiKey.trim())
             .putString(
@@ -96,14 +78,10 @@ class SettingsRepository(
                 KEY_BASE_URL,
                 settings.baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL },
             )
-            .putString(KEY_API_SOURCE, settings.apiSource.name)
-            .putString(KEY_DEVICE_ID, deviceId)
-            .putString(KEY_SESSION_TOKEN, settings.sessionToken.trim())
-            .apply {
-                val expiresAt = settings.sessionExpiresAt
-                if (expiresAt != null) putLong(KEY_SESSION_EXPIRES_AT, expiresAt)
-                else remove(KEY_SESSION_EXPIRES_AT)
-            }
+            .remove(KEY_API_SOURCE)
+            .remove(KEY_DEVICE_ID)
+            .remove(KEY_SESSION_TOKEN)
+            .remove(KEY_SESSION_EXPIRES_AT)
             .remove(KEY_RELAY_BASE_URL)
             .putBoolean(KEY_PRIVACY_ACCEPTED, settings.privacyAccepted)
             .commit()
@@ -112,19 +90,8 @@ class SettingsRepository(
         }
     }
 
-    private fun stableDeviceId(): String {
-        deviceIdPreferences.getString(KEY_STABLE_DEVICE_ID, null)
-            ?.takeIf { it.isNotBlank() }
-            ?.let { return it }
-        val generated = UUID.randomUUID().toString()
-        deviceIdPreferences.edit().putString(KEY_STABLE_DEVICE_ID, generated).commit()
-        return generated
-    }
-
     companion object {
         private const val PREFERENCES_NAME = "wenzhen_secure_settings"
-        private const val DEVICE_ID_PREFERENCES_NAME = "wenzhen_plain_settings"
-        private const val KEY_STABLE_DEVICE_ID = "stable_device_id"
         private const val KEY_API_KEY = "deepseek_api_key"
         private const val KEY_MODEL = "deepseek_model"
         private const val KEY_BASE_URL = "deepseek_base_url"

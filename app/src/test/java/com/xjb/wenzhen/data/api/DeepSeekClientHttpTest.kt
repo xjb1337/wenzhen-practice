@@ -42,14 +42,6 @@ class DeepSeekClientHttpTest {
         baseUrl = server.url("/v1").toString().trimEnd('/'),
     )
 
-    private fun relayConfig() = LlmConfig(
-        apiKey = "session-token",
-        model = "deepseek-flash",
-        baseUrl = server.url("/").toString().trimEnd('/'),
-        deviceId = "device-1",
-        useRelay = true,
-    )
-
     private fun successBody(content: String = "ok") =
         """{"choices":[{"message":{"content":"$content"}}]}"""
 
@@ -80,24 +72,7 @@ class DeepSeekClientHttpTest {
     }
 
     @Test
-    fun `内置服务 5xx 不自动重试以避免重复扣额度`() = runBlocking {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(502)
-                .setBody("""{"error":{"message":"bad gateway"}}"""),
-        )
-
-        try {
-            client.complete(relayConfig(), messages)
-            fail("应当抛出 LlmException")
-        } catch (error: LlmException) {
-            assertEquals(LlmErrorKind.SERVER_UNAVAILABLE, error.kind)
-            assertEquals(1, server.requestCount)
-        }
-    }
-
-    @Test
-    fun `非内置服务 502 仍重试三次`() = runBlocking {
+    fun `502 服务端错误仍重试三次`() = runBlocking {
         repeat(3) {
             server.enqueue(
                 MockResponse()
@@ -112,24 +87,6 @@ class DeepSeekClientHttpTest {
         } catch (error: LlmException) {
             assertEquals(LlmErrorKind.SERVER_UNAVAILABLE, error.kind)
             assertEquals(3, server.requestCount)
-        }
-    }
-
-    @Test
-    fun `内置服务关闭错误不重试并映射为服务不可用`() = runBlocking {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(503)
-                .setBody("""{"error":{"code":"relay_disabled"}}"""),
-        )
-
-        try {
-            client.complete(relayConfig(), messages)
-            fail("应当抛出 LlmException")
-        } catch (error: LlmException) {
-            assertEquals(LlmErrorKind.SERVICE_DISABLED, error.kind)
-            assertEquals("内置服务暂不可用", error.message)
-            assertEquals(1, server.requestCount)
         }
     }
 
@@ -151,111 +108,6 @@ class DeepSeekClientHttpTest {
 
         assertEquals("你好", result)
         assertEquals(listOf("你", "好"), deltas)
-    }
-
-    @Test
-    fun `内置服务请求使用 v1 路径和会话头`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
-
-        val result = client.complete(relayConfig(), messages)
-
-        assertEquals("ok", result)
-        val request = server.takeRequest()
-        assertEquals("/v1/chat/completions", request.path)
-        assertEquals("Bearer session-token", request.getHeader("Authorization"))
-        assertEquals("device-1", request.getHeader("X-Device-Id"))
-    }
-
-    @Test
-    fun `内置服务额度错误不重试并返回中文提示`() = runBlocking {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(403)
-                .setBody("""{"error":{"code":"quota_device"}}"""),
-        )
-
-        try {
-            client.complete(relayConfig(), messages)
-            fail("应当抛出 LlmException")
-        } catch (error: LlmException) {
-            assertEquals("今日额度已用完", error.message)
-            assertEquals(1, server.requestCount)
-        }
-    }
-
-    @Test
-    fun `健康检查响应非 JSON 时按可用处理并继续校验会话`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(200))
-        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
-
-        val result = client.testConnection(relayConfig())
-
-        assertEquals(ConnectionTestResult.Success, result)
-        assertEquals(2, server.requestCount)
-        val request = server.takeRequest()
-        assertEquals("/v1/health", request.path)
-        assertEquals("Bearer session-token", request.getHeader("Authorization"))
-        assertEquals("device-1", request.getHeader("X-Device-Id"))
-    }
-
-    @Test
-    fun `健康检查通过但会话失效时测试连接失败并提示重新兑换`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"relayEnabled":true}"""))
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(401)
-                .setBody("""{"error":{"code":"unauthorized"}}"""),
-        )
-
-        val result = client.testConnection(relayConfig())
-
-        val failure = result as ConnectionTestResult.Failure
-        assertEquals("AUTH", failure.kind?.name)
-        assertTrue(failure.message.contains("重新兑换"))
-        assertEquals(2, server.requestCount)
-        assertEquals("/v1/health", server.takeRequest().path)
-        assertEquals("/v1/chat/completions", server.takeRequest().path)
-    }
-
-    @Test
-    fun `健康检查通过且会话有效时测试连接成功`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(200).setBody("""{"ok":true,"relayEnabled":true}"""))
-        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
-
-        val result = client.testConnection(relayConfig())
-
-        assertEquals(ConnectionTestResult.Success, result)
-        assertEquals(2, server.requestCount)
-        assertEquals("/v1/health", server.takeRequest().path)
-        assertEquals("/v1/chat/completions", server.takeRequest().path)
-    }
-
-    @Test
-    fun `健康检查返回服务关闭时测试连接直接失败`() = runBlocking {
-        server.enqueue(
-            MockResponse()
-                .setResponseCode(200)
-                .setBody("""{"ok":true,"relayEnabled":false}"""),
-        )
-
-        val result = client.testConnection(relayConfig())
-
-        assertTrue(result is ConnectionTestResult.Failure)
-        assertEquals("内置服务暂不可用", (result as ConnectionTestResult.Failure).message)
-        assertEquals(1, server.requestCount)
-    }
-
-    @Test
-    fun `健康检查缺失时回退到最小补全请求`() = runBlocking {
-        server.enqueue(MockResponse().setResponseCode(404))
-        server.enqueue(MockResponse().setResponseCode(200).setBody(successBody()))
-
-        val result = client.testConnection(relayConfig())
-
-        assertEquals(ConnectionTestResult.Success, result)
-        assertEquals(2, server.requestCount)
-        assertEquals("/v1/health", server.takeRequest().path)
-        assertEquals("/v1/chat/completions", server.takeRequest().path)
     }
 
     @Test
@@ -311,5 +163,21 @@ class DeepSeekClientHttpTest {
             job.cancelAndJoin()
         }
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `测试连接遇到协程取消会立即中止阻塞请求`() = runBlocking {
+        server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+        var returnedResult: ConnectionTestResult? = null
+
+        val job = launch {
+            returnedResult = client.testConnection(config())
+        }
+        delay(200)
+        withTimeout(3_000) {
+            job.cancelAndJoin()
+        }
+        assertEquals(1, server.requestCount)
+        assertEquals(null, returnedResult)
     }
 }

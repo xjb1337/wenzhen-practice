@@ -2,17 +2,13 @@ package com.xjb.wenzhen.ui.screens
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -21,7 +17,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.ui.components.NoticeBanner
-import com.xjb.wenzhen.ui.theme.TealContainer
 
 fun cleanUpdateNotes(notes: String): String = notes.lineSequence().joinToString("\n") { raw ->
     raw.trimStart()
@@ -51,27 +46,6 @@ fun UpdateDialog(
                 modifier = Modifier.verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(14.dp),
-                    color = TealContainer.copy(alpha = 0.65f),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-                        horizontalArrangement = Arrangement.spacedBy(16.dp),
-                    ) {
-                        Text(
-                            text = "versionCode ${update.versionCode}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        Text(
-                            text = "最低 Android SDK ${update.minSdk}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
                 Text("更新说明", style = MaterialTheme.typography.titleSmall)
                 Text(
                     text = cleanUpdateNotes(update.notes).ifBlank { "本版本包含体验优化与问题修复。" },
@@ -84,7 +58,7 @@ fun UpdateDialog(
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Text(
-                            text = "正在下载并校验 APK… ${progress ?: 0}%",
+                            text = "正在下载安装包… ${progress ?: 0}%",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -92,7 +66,7 @@ fun UpdateDialog(
                 }
                 if (isDownloaded) {
                     NoticeBanner(
-                        message = "APK 已通过 SHA-256 与签名证书校验，可以安装。",
+                        message = "安装包已就绪，可以安装。",
                         isError = false,
                     )
                 }
@@ -100,7 +74,7 @@ fun UpdateDialog(
                     NoticeBanner(message = errorMessage)
                 }
                 Text(
-                    text = "覆盖安装会保留本机历史记录。如系统提示不允许安装，请按提示允许本应用安装未知来源应用。",
+                    text = "覆盖安装会保留本地历史记录。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

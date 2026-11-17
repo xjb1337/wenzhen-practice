@@ -22,7 +22,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
-import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -97,18 +96,18 @@ fun FinishConsultationScreen(
             item {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    color = TealContainer.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(20.dp),
+                    color = TealContainer.copy(alpha = 0.65f),
                 ) {
                     Row(
-                        modifier = Modifier.padding(18.dp),
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
-                        verticalAlignment = Alignment.Top,
+                        modifier = Modifier.padding(16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(45.dp)
-                                .background(TealPrimary, RoundedCornerShape(14.dp)),
+                                .size(42.dp)
+                                .background(TealPrimary, RoundedCornerShape(13.dp)),
                             contentAlignment = Alignment.Center,
                         ) {
                             Icon(
@@ -117,47 +116,20 @@ fun FinishConsultationScreen(
                                 tint = MaterialTheme.colorScheme.onPrimary,
                             )
                         }
-                        Column {
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
                             Text(
-                                text = "最后一步：写下你的判断",
+                                text = "$patientName 的问诊已完成",
                                 style = MaterialTheme.typography.titleMedium,
                             )
-                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "病历和评分将基于本次对话生成。先独立作出诊断，再看反馈，练习效果更好。",
+                                text = "$department · $caseTitle",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    }
-                }
-            }
-
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = department,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier
-                                .background(TealContainer, CircleShape)
-                                .padding(horizontal = 10.dp, vertical = 4.dp),
-                        )
-                        Text(
-                            text = "$patientName 的问诊已完成",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -204,7 +176,6 @@ fun FinishConsultationScreen(
                         minLines = 2,
                         maxLines = 4,
                         shape = RoundedCornerShape(16.dp),
-                        supportingText = { Text("请写出你认为最可能的诊断") },
                     )
                 }
             }
@@ -255,33 +226,14 @@ fun FinishConsultationScreen(
                 }
             }
 
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Lightbulb,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(19.dp),
-                        )
-                        Text(
-                            text = if (thinkingLevel == ThinkingLevel.MAX) {
-                                "对话未涉及的内容会在大病历中标注为“未问及”。当前为最高思考强度，生成可能需要 1-3 分钟，请耐心等待。"
-                            } else {
-                                "对话未涉及的内容会在大病历中标注为“未问及”。提交后请稍候，生成通常需要十几秒。"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+            if (thinkingLevel == ThinkingLevel.MAX && !isSubmitting) {
+                item {
+                    Text(
+                        text = "最高思考强度生成约需 1–3 分钟",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(horizontal = 4.dp),
+                    )
                 }
             }
 

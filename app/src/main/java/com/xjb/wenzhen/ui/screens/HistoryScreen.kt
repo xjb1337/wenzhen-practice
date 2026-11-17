@@ -160,9 +160,15 @@ fun HistoryScreen(
         )
     }
     val departments = listOf("全部") + records.map { it.department }.filter { it.isNotBlank() }.distinct()
+    val activeDepartment = if (selectedDepartment in departments) selectedDepartment else "全部"
+    val normalizedQuery = query.trim()
     val now = System.currentTimeMillis()
     val visibleRecords = records.filter { record ->
-        val departmentMatch = selectedDepartment == "全部" || record.department == selectedDepartment
+        val queryMatch = normalizedQuery.isEmpty() ||
+            record.caseTitle.contains(normalizedQuery, ignoreCase = true) ||
+            record.department.contains(normalizedQuery, ignoreCase = true) ||
+            record.patientName.contains(normalizedQuery, ignoreCase = true)
+        val departmentMatch = activeDepartment == "全部" || record.department == activeDepartment
         val scoreMatch = when (scoreBand) {
             "60 分以下" -> record.totalScore < 60
             "60-79 分" -> record.totalScore in 60..79
@@ -175,24 +181,26 @@ fun HistoryScreen(
             "最近 30 天" -> now - record.createdAt < 30L * 24 * 60 * 60 * 1000
             else -> true
         }
-        departmentMatch && scoreMatch && dateMatch
+        queryMatch && departmentMatch && scoreMatch && dateMatch
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             WenzhenTopBar(
                 title = "历史记录",
-                subtitle = "回看每一次问诊与复盘",
                 actions = {
-                    if (records.isNotEmpty()) {
-                        Box {
-                            IconButton(onClick = { showExportMenu = true }) {
-                                Icon(Icons.Outlined.Share, contentDescription = "导出历史记录")
-                            }
-                            DropdownMenu(
-                                expanded = showExportMenu,
-                                onDismissRequest = { showExportMenu = false },
-                            ) {
+                    Box {
+                        IconButton(onClick = { showExportMenu = true }) {
+                            Icon(
+                                Icons.Outlined.Share,
+                                contentDescription = if (records.isNotEmpty()) "导出或恢复历史记录" else "从备份恢复历史记录",
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = showExportMenu,
+                            onDismissRequest = { showExportMenu = false },
+                        ) {
+                            if (records.isNotEmpty()) {
                                 DropdownMenuItem(
                                     text = { Text("导出 Markdown") },
                                     onClick = {
@@ -226,15 +234,17 @@ fun HistoryScreen(
                                         )
                                     },
                                 )
-                                DropdownMenuItem(
-                                    text = { Text("从 JSON 备份恢复") },
-                                    onClick = {
-                                        showExportMenu = false
-                                        importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
-                                    },
-                                )
                             }
+                            DropdownMenuItem(
+                                text = { Text("从 JSON 备份恢复") },
+                                onClick = {
+                                    showExportMenu = false
+                                    importLauncher.launch(arrayOf("application/json", "text/plain", "*/*"))
+                                },
+                            )
                         }
+                    }
+                    if (records.isNotEmpty()) {
                         IconButton(onClick = { showClearConfirm = true }) {
                             Icon(Icons.Outlined.Delete, contentDescription = "清空历史记录")
                         }
@@ -296,7 +306,7 @@ fun HistoryScreen(
                         ) {
                             departments.forEach { department ->
                                 FilterChip(
-                                    selected = selectedDepartment == department,
+                                    selected = activeDepartment == department,
                                     onClick = { selectedDepartment = department },
                                     label = { Text(department) },
                                 )
@@ -328,8 +338,10 @@ fun HistoryScreen(
                         }
                     }
                 }
-                item {
-                    HistorySummary(records = visibleRecords)
+                if (visibleRecords.isNotEmpty()) {
+                    item {
+                        HistorySummary(records = visibleRecords)
+                    }
                 }
                 item {
                     Row(
@@ -379,7 +391,11 @@ private fun shareFile(context: android.content.Context, file: java.io.File, mime
         putExtra(Intent.EXTRA_STREAM, uri)
         addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
     }
-    context.startActivity(Intent.createChooser(intent, title))
+    runCatching {
+        context.startActivity(Intent.createChooser(intent, title))
+    }.onFailure {
+        Toast.makeText(context, "未找到可用的分享应用", Toast.LENGTH_SHORT).show()
+    }
 }
 
 private fun conversationDurationMinutes(record: ConsultationEntity): Long? {
@@ -406,13 +422,13 @@ private fun HistorySummary(records: List<ConsultationEntity>) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "持续复盘，问诊会更稳",
+                    text = "练习汇总",
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium,
                 )
                 Spacer(modifier = Modifier.height(5.dp))
                 Text(
-                    text = "已完成 ${records.size} 次练习，平均 ${average} 分",
+                    text = "已完成 ${records.size} 次问诊",
                     color = Color.White.copy(alpha = 0.78f),
                     style = MaterialTheme.typography.bodySmall,
                 )

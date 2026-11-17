@@ -9,11 +9,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
-import com.xjb.wenzhen.data.api.InviteRedeemer
 import com.xjb.wenzhen.data.api.LlmClient
-import com.xjb.wenzhen.data.api.LlmErrorKind
 import com.xjb.wenzhen.data.api.LlmException
-import com.xjb.wenzhen.data.api.RedeemResult
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.db.AppDatabase
@@ -30,7 +27,6 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.ThinkingLevel
-import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.SettingsRepository
 import com.xjb.wenzhen.domain.AiCommentStatus
@@ -38,7 +34,6 @@ import com.xjb.wenzhen.domain.DOCTOR_OPENING_LINE
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
-import com.xjb.wenzhen.ui.theme.AppTheme
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -130,7 +125,6 @@ class AppViewModelTest {
     private fun appContainer(
         client: LlmClient,
         settingsRepository: SettingsRepository = this.settingsRepository,
-        inviteRedeemer: InviteRedeemer? = null,
         consultationRepository: ConsultationRepository? = null,
         consultationDraftRepository: ConsultationDraftRepository? = null,
     ): AppContainer = AppContainer(
@@ -138,7 +132,6 @@ class AppViewModelTest {
         overrideLlmClient = client,
         overrideDatabase = db,
         overrideSettingsRepository = settingsRepository,
-        overrideInviteRedeemer = inviteRedeemer,
         overrideConsultationRepository = consultationRepository,
         overrideConsultationDraftRepository = consultationDraftRepository,
     )
@@ -147,10 +140,9 @@ class AppViewModelTest {
         client: LlmClient,
         settings: AppSettings = apiSettings(),
         settingsRepository: SettingsRepository = this.settingsRepository,
-        inviteRedeemer: InviteRedeemer? = null,
         consultationRepository: ConsultationRepository? = null,
         consultationDraftRepository: ConsultationDraftRepository? = null,
-        container: AppContainer = appContainer(client, settingsRepository, inviteRedeemer, consultationRepository, consultationDraftRepository),
+        container: AppContainer = appContainer(client, settingsRepository, consultationRepository, consultationDraftRepository),
     ): AppViewModel {
         val medicalCase = BuiltInCases.all.first()
         val initial = AppUiState(
@@ -189,96 +181,6 @@ class AppViewModelTest {
         val error = vm.uiState.value.settingsSaveError
         assertNotNull(error)
         assertTrue(error.orEmpty().contains("HTTPS"))
-    }
-
-    @Test
-    fun `内置服务鉴权失败会清空会话并提示重新兑换`() = runTest(dispatcher) {
-        val settings = AppSettings(
-            apiSource = ApiSource.BUILTIN,
-            deviceId = "device-1",
-            sessionToken = "old-session",
-            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
-        )
-        val vm = viewModel(AuthFailingClient(), settings)
-        val event = async { vm.events.first() }
-
-        vm.testConnection(ApiSource.BUILTIN, "", AppSettings.MODEL_FLASH, "", ThinkingLevel.OFF)
-        advanceUntilIdle()
-
-        assertEquals("", vm.uiState.value.settings.sessionToken)
-        assertNull(vm.uiState.value.settings.sessionExpiresAt)
-        assertEquals(
-            AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"),
-            event.await(),
-        )
-    }
-
-    @Test
-    fun `测试连接返回鉴权失败时清空会话并提示重新兑换`() = runTest(dispatcher) {
-        val settings = AppSettings(
-            apiSource = ApiSource.BUILTIN,
-            deviceId = "device-1",
-            sessionToken = "old-session",
-            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
-        )
-        val vm = viewModel(AuthResultFailingClient(), settings)
-        val event = async { vm.events.first() }
-
-        vm.testConnection(ApiSource.BUILTIN, "", AppSettings.MODEL_FLASH, "", ThinkingLevel.OFF)
-        advanceUntilIdle()
-
-        assertEquals("", vm.uiState.value.settings.sessionToken)
-        assertNull(vm.uiState.value.settings.sessionExpiresAt)
-        assertEquals(
-            AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"),
-            event.await(),
-        )
-    }
-
-    @Test
-    fun `失效 token 与当前会话不一致时不清除`() = runTest(dispatcher) {
-        val oldSettings = AppSettings(
-            apiSource = ApiSource.BUILTIN,
-            deviceId = "device-1",
-            sessionToken = "old-session",
-            sessionExpiresAt = System.currentTimeMillis() + 60_000L,
-        )
-        val container = appContainer(
-            client = AuthFailingClient(),
-            inviteRedeemer = FakeInviteRedeemer(RedeemResult.Success("new-session")),
-        )
-        val vm = viewModel(AuthFailingClient(), oldSettings, container = container)
-
-        vm.redeemInvite("WZ-TEST")
-        advanceUntilIdle()
-        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
-
-        val staleConfig = AppSettings(
-            apiSource = ApiSource.BUILTIN,
-            deviceId = "device-1",
-            sessionToken = "old-session",
-        ).toLlmConfig()
-        runCatching { container.llmClient.testConnection(staleConfig) }
-        advanceUntilIdle()
-
-        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
-    }
-
-    @Test
-    fun `兑换期间修改的主题不会被旧快照覆盖`() = runTest(dispatcher) {
-        val redeemer = BlockingInviteRedeemer()
-        val vm = viewModel(SuccessClient(), settings = apiSettings(), inviteRedeemer = redeemer)
-
-        vm.redeemInvite("WZ-TEST")
-        runCurrent()
-        vm.setTheme(AppTheme.CLINICAL_BLUE)
-        advanceUntilIdle()
-
-        redeemer.result.complete(RedeemResult.Success("new-session", expiresAt = 123_000L))
-        advanceUntilIdle()
-
-        assertEquals(AppTheme.CLINICAL_BLUE, vm.uiState.value.settings.theme)
-        assertEquals("new-session", vm.uiState.value.settings.sessionToken)
     }
 
     @Test
@@ -959,13 +861,97 @@ class AppViewModelTest {
     fun `测试连接遇到协程取消时不写入失败状态`() = runTest(dispatcher) {
         val vm = viewModel(CancellingClient())
 
-        vm.testConnection(ApiSource.OWN_KEY, "key", "deepseek-chat", "https://api.deepseek.com", ThinkingLevel.OFF)
+        vm.testConnection("key", "deepseek-chat", "https://api.deepseek.com", ThinkingLevel.OFF)
         advanceUntilIdle()
 
         assertTrue(vm.uiState.value.connectionTest.isTesting)
         assertNull(vm.uiState.value.connectionTest.message)
         assertNull(vm.uiState.value.connectionTest.isSuccess)
     }
+
+    @Test
+    fun `开启离线模式后即使已配置Key也不再调用在线AI`() = runTest(dispatcher) {
+        val noNetworkClient = object : LlmClient {
+            override suspend fun complete(
+                config: LlmConfig,
+                messages: List<LlmMessage>,
+                jsonMode: Boolean,
+                temperature: Double,
+            ): String = throw AssertionError("离线模式不应调用在线 complete")
+
+            override suspend fun stream(
+                config: LlmConfig,
+                messages: List<LlmMessage>,
+                temperature: Double,
+                onDelta: suspend (String) -> Unit,
+            ): String = throw AssertionError("离线模式不应调用在线 stream")
+        }
+        val vm = viewModel(
+            client = noNetworkClient,
+            settings = apiSettings().copy(offlineMode = true),
+        )
+
+        vm.sendMessage("您胸痛多久了？")
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.isPatientTyping)
+        assertNull(vm.uiState.value.chatError)
+        assertEquals(MessageDeliveryState.SENT, vm.uiState.value.messages[2].deliveryState)
+        assertEquals(MessageRole.PATIENT, vm.uiState.value.messages.last().role)
+
+        vm.finishConsultation("急性心肌梗死", "持续胸痛伴大汗")
+        waitUntil { vm.uiState.value.currentResult != null }
+
+        val result = vm.uiState.value.currentResult!!
+        assertFalse(result.isAiGeneratedCase)
+        assertFalse(result.score.aiCommentFailed)
+    }
+
+    @Test
+    fun `快速切换历史详情时旧请求结果不会覆盖最新选择`() = runTest(dispatcher) {
+        val firstCase = BuiltInCases.all.first()
+        val secondCase = BuiltInCases.all[1]
+        val firstGate = CompletableDeferred<Unit>()
+        val dao = object : ConsultationDao by db.consultationDao() {
+            override suspend fun getById(id: Long): ConsultationEntity? {
+                if (id == 1L) {
+                    firstGate.await()
+                    return entityFor(1L, firstCase)
+                }
+                return entityFor(2L, secondCase)
+            }
+        }
+        val vm = viewModel(
+            client = SuccessClient(),
+            consultationRepository = ConsultationRepository(dao),
+        )
+
+        vm.loadHistoryDetail(1L)
+        dispatcher.scheduler.runCurrent()
+        vm.loadHistoryDetail(2L)
+        advanceUntilIdle()
+        firstGate.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(2L, vm.uiState.value.historyDetail?.recordId)
+        assertEquals(secondCase.title, vm.uiState.value.historyDetail?.caseTitle)
+    }
+
+    private fun entityFor(id: Long, medicalCase: com.xjb.wenzhen.data.model.MedicalCase) = ConsultationEntity(
+        id = id,
+        caseTitle = medicalCase.title,
+        department = medicalCase.department,
+        difficulty = medicalCase.difficulty.label,
+        patientName = medicalCase.patient.name,
+        caseJson = CaseJsonCodec.encode(medicalCase),
+        conversationJson = "[]",
+        medicalRecord = "",
+        scoreJson = VALID_SCORE_JSON,
+        totalScore = 85,
+        initialDiagnosis = medicalCase.correctDiagnosis,
+        diagnosisBasis = "依据",
+        createdAt = id * 1000L,
+    )
 
     private fun waitUntil(condition: () -> Boolean) {
         repeat(200) {
@@ -1145,7 +1131,7 @@ class AppViewModelTest {
             onDelta: suspend (String) -> Unit,
         ): String {
             deltaHandler = onDelta
-            return awaitCancellation()
+            awaitCancellation()
         }
     }
 
@@ -1166,7 +1152,7 @@ class AppViewModelTest {
                 scoreRelease.await()
                 return VALID_SCORE_JSON
             }
-            return awaitCancellation()
+            awaitCancellation()
         }
 
         override suspend fun stream(
@@ -1175,44 +1161,6 @@ class AppViewModelTest {
             temperature: Double,
             onDelta: suspend (String) -> Unit,
         ): String = awaitCancellation()
-    }
-
-    private class AuthFailingClient : LlmClient {
-        override suspend fun complete(
-            config: LlmConfig,
-            messages: List<LlmMessage>,
-            jsonMode: Boolean,
-            temperature: Double,
-        ): String = throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
-
-        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
-            throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
-    }
-
-    private class AuthResultFailingClient : LlmClient {
-        override suspend fun complete(
-            config: LlmConfig,
-            messages: List<LlmMessage>,
-            jsonMode: Boolean,
-            temperature: Double,
-        ): String = throw LlmException("会话已失效", kind = LlmErrorKind.AUTH)
-
-        override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
-            ConnectionTestResult.Failure("会话已失效，请重新兑换邀请码。", LlmErrorKind.AUTH)
-    }
-
-    private class FakeInviteRedeemer(
-        private val result: RedeemResult,
-    ) : InviteRedeemer {
-        override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
-            result
-    }
-
-    private class BlockingInviteRedeemer : InviteRedeemer {
-        val result = CompletableDeferred<RedeemResult>()
-
-        override suspend fun redeem(baseUrl: String, code: String, deviceId: String): RedeemResult =
-            result.await()
     }
 
     private companion object {

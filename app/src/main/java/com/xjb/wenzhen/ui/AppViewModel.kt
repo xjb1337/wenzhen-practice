@@ -6,7 +6,6 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.xjb.wenzhen.AppContainer
 import com.xjb.wenzhen.data.api.ConnectionTestResult
-import com.xjb.wenzhen.data.api.RedeemResult
 import com.xjb.wenzhen.data.cases.CaseJsonCodec
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.db.ConsultationEntity
@@ -23,7 +22,6 @@ import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.settings.AppSettings
-import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.CaseGenerationSelection
@@ -49,18 +47,15 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import java.util.UUID
 
 class AppViewModel(
     private val container: AppContainer,
     initialUiState: AppUiState? = null,
 ) : ViewModel() {
-    private val initialSettings = runCatching { container.settingsRepository.load() }
-        .getOrDefault(AppSettings())
-
     private val _uiState = MutableStateFlow(
         initialUiState ?: AppUiState(
-            settings = initialSettings,
+            settings = runCatching { container.settingsRepository.load() }
+                .getOrDefault(AppSettings()),
             currentVersionName = container.currentVersionName,
             currentVersionCode = container.currentVersionCode,
         )
@@ -71,6 +66,8 @@ class AppViewModel(
     val events = _events.receiveAsFlow()
 
     private var historyJob: Job? = null
+    private var historyDetailJob: Job? = null
+    private var historyDetailGeneration = 0L
     private var draftSaveJob: Job? = null
     /** 串行化草稿落库与清除，避免“保存中放弃草稿”时旧草稿在 clear 之后又写回。 */
     private val draftMutex = Mutex()
@@ -91,29 +88,6 @@ class AppViewModel(
         observeHistory()
         observeDraft()
         observeSavedCases()
-        observeRelayAuthInvalidation()
-    }
-
-    private fun observeRelayAuthInvalidation() {
-        viewModelScope.launch {
-            container.relayAuthWatchingClient.invalidated.collect { invalidatedToken ->
-                val currentSettings = _uiState.value.settings
-                if (invalidatedToken != currentSettings.sessionToken) return@collect
-                val updated = currentSettings.copy(sessionToken = "", sessionExpiresAt = null)
-                runCatching { container.settingsRepository.save(updated) }
-                    .onSuccess {
-                        _uiState.update { it.copy(settings = updated) }
-                        _events.send(AppEvent.ShowMessage("内置服务会话已失效，请在设置中重新兑换邀请码。"))
-                    }
-                    .onFailure { error ->
-                        _uiState.update {
-                            it.copy(
-                                settingsSaveError = friendlyMessage(error, "设置保存失败，请稍后重试。"),
-                            )
-                        }
-                    }
-            }
-        }
     }
 
     override fun onCleared() {
@@ -379,7 +353,7 @@ class AppViewModel(
         patientReplyJob = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             try {
-                if (config.apiKey.isBlank() && _uiState.value.settings.offlineMode) {
+                if (_uiState.value.settings.offlineMode) {
                     val reply = OfflinePracticeService.patientReply(medicalCase, conversation)
                     _uiState.update { latest ->
                         if (generation != patientReplyGeneration) return@update latest
@@ -575,7 +549,7 @@ class AppViewModel(
         val generation = ++clinicalGeneration
         clinicalJob = viewModelScope.launch {
             try {
-                val result = if (state.settings.offlineMode && !state.hasApiKey) {
+                val result = if (state.settings.offlineMode) {
                     OfflinePracticeService.clinicalResult(medicalCase, requestType)
                 } else {
                     container.clinicalDataService.request(
@@ -627,6 +601,8 @@ class AppViewModel(
             return
         }
 
+        val beforeCaseId = state.activeCase?.id
+        val beforeStartedAt = state.consultationStartedAt
         _uiState.update {
             it.copy(isGeneratingCase = true, generationError = null)
         }
@@ -640,13 +616,6 @@ class AppViewModel(
                     personality = resolved.personality,
                     encounterType = resolved.encounterType,
                 )
-                _uiState.update { latest ->
-                    latest.copy(
-                        cases = listOf(generated) + latest.cases,
-                        isGeneratingCase = false,
-                        generationError = null,
-                    )
-                }
                 container.savedCaseRepository.save(
                     SavedCaseEntity(
                         id = generated.id,
@@ -654,7 +623,21 @@ class AppViewModel(
                         createdAt = System.currentTimeMillis(),
                     )
                 )
-                openCase(generated, finalPersonality, resolved.encounterType)
+                _uiState.update { latest ->
+                    latest.copy(
+                        cases = listOf(generated) + latest.cases,
+                        isGeneratingCase = false,
+                        generationError = null,
+                    )
+                }
+                val current = _uiState.value
+                if (current.activeCase?.id == beforeCaseId &&
+                    current.consultationStartedAt == beforeStartedAt
+                ) {
+                    openCase(generated, finalPersonality, resolved.encounterType)
+                } else {
+                    _events.send(AppEvent.ShowMessage("新病例「${generated.title}」已生成并加入病例库。"))
+                }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -719,7 +702,7 @@ class AppViewModel(
             try {
                 val recordResult: Result<String>
                 val scoreResult: Result<ScoreResult>
-                if (state.settings.offlineMode && !state.hasApiKey) {
+                if (state.settings.offlineMode) {
                     recordResult = if (generateRecord) {
                         runCatching {
                             OfflinePracticeService.record(
@@ -847,11 +830,13 @@ class AppViewModel(
                     medicalRecord = record,
                     score = score,
                     initialDiagnosis = diagnosis,
+                    diagnosisBasis = diagnosisBasis.trim(),
                     treatmentAnswer = treatmentAnswer.trim(),
                     encounterType = state.encounterType,
                     messages = conversation,
                     referenceCarePlan = referenceCarePlan,
                     notice = notice,
+                    isAiGeneratedCase = medicalCase.isAiGenerated,
                 )
                 _uiState.update {
                     it.copy(
@@ -962,15 +947,10 @@ class AppViewModel(
         baseUrl: String,
         thinkingLevel: ThinkingLevel = _uiState.value.settings.thinkingLevel,
         generateRecord: Boolean = _uiState.value.settings.generateRecord,
-        apiSource: ApiSource = _uiState.value.settings.apiSource,
     ) {
         val currentSettings = _uiState.value.settings
-        val normalizedUrl = if (apiSource == ApiSource.OWN_KEY) {
-            BaseUrlPolicy.normalizeHttps(baseUrl)
-        } else {
-            currentSettings.baseUrl.ifBlank { AppSettings.DEFAULT_BASE_URL }
-        }
-        if (apiSource == ApiSource.OWN_KEY && normalizedUrl == null) {
+        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
+        if (normalizedUrl == null) {
             _uiState.update {
                 it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。")
             }
@@ -978,16 +958,10 @@ class AppViewModel(
         }
         val newSettings = currentSettings.copy(
             apiKey = apiKey.trim(),
-            model = if (apiSource == ApiSource.BUILTIN) {
-                AppSettings.MODEL_FLASH
-            } else {
-                model.trim().ifBlank { AppSettings.MODEL_FLASH }
-            },
-            baseUrl = normalizedUrl ?: currentSettings.baseUrl,
+            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
+            baseUrl = normalizedUrl,
             thinkingLevel = thinkingLevel,
             generateRecord = generateRecord,
-            apiSource = apiSource,
-            deviceId = currentSettings.deviceId.trim().ifBlank { UUID.randomUUID().toString() },
         )
         try {
             container.settingsRepository.save(newSettings)
@@ -1012,163 +986,43 @@ class AppViewModel(
         _uiState.update { it.copy(settingsSaveError = null) }
     }
 
-    fun redeemInvite(code: String) {
-        val inviteCode = code.trim()
-        if (inviteCode.isEmpty()) {
-            _uiState.update { it.copy(redeemError = "请输入邀请码。") }
-            return
-        }
-        val state = _uiState.value
-        if (state.isRedeemingInvite) return
-        val currentSettings = state.settings
-        val deviceId = currentSettings.deviceId.trim().ifBlank { UUID.randomUUID().toString() }
-        _uiState.update { it.copy(isRedeemingInvite = true, redeemError = null) }
-        viewModelScope.launch {
-            when (val result = container.relayClient.redeem(
-                baseUrl = currentSettings.relayBaseUrl,
-                code = inviteCode,
-                deviceId = deviceId,
-            )) {
-                is RedeemResult.Success -> {
-                    // 兑换期间用户可能已修改主题等设置，成功分支必须基于最新快照合并。
-                    val updated = _uiState.value.settings.copy(
-                        apiSource = ApiSource.BUILTIN,
-                        deviceId = deviceId,
-                        sessionToken = result.sessionToken,
-                        sessionExpiresAt = result.expiresAt,
-                        relayBaseUrl = AppSettings.RELAY_BASE_URL,
-                    )
-                    try {
-                        container.settingsRepository.save(updated)
-                        _uiState.update {
-                            it.copy(
-                                settings = updated,
-                                isRedeemingInvite = false,
-                                redeemError = null,
-                                settingsSaveError = null,
-                                connectionTest = ConnectionTestUiState(),
-                            )
-                        }
-                        _events.send(AppEvent.ShowMessage("邀请码兑换成功，已启用内置服务。"))
-                    } catch (error: Exception) {
-                        _uiState.update {
-                            it.copy(
-                                isRedeemingInvite = false,
-                                redeemError = friendlyMessage(error, "兑换成功，但本机保存失败，请重试。"),
-                            )
-                        }
-                    }
-                }
-                is RedeemResult.Failure -> {
-                    _uiState.update {
-                        it.copy(
-                            isRedeemingInvite = false,
-                            redeemError = result.message,
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun clearInviteRedemption() {
-        val currentSettings = _uiState.value.settings
-        val updated = currentSettings.copy(sessionToken = "", sessionExpiresAt = null)
-        try {
-            container.settingsRepository.save(updated)
-            _uiState.update {
-                it.copy(
-                    settings = updated,
-                    redeemError = null,
-                    connectionTest = ConnectionTestUiState(),
-                )
-            }
-            viewModelScope.launch { _events.send(AppEvent.ShowMessage("已清除内置服务兑换信息。")) }
-        } catch (error: Exception) {
-            _uiState.update {
-                it.copy(redeemError = friendlyMessage(error, "清除兑换信息失败，请重试。"))
-            }
-        }
-    }
-
-    fun clearRedeemError() {
-        _uiState.update { it.copy(redeemError = null) }
-    }
-
     fun testConnection(
-        apiSource: ApiSource,
         apiKey: String,
         model: String,
         baseUrl: String,
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ) {
         if (_uiState.value.connectionTest.isTesting) return
-        val currentSettings = _uiState.value.settings
-        val config = if (apiSource == ApiSource.BUILTIN) {
-            if (currentSettings.sessionToken.isBlank()) {
-                _uiState.update {
-                    it.copy(
-                        connectionTest = ConnectionTestUiState(
-                            message = "请先兑换邀请码。",
-                            isSuccess = false,
-                        )
+        val key = apiKey.trim()
+        if (key.isEmpty()) {
+            _uiState.update {
+                it.copy(
+                    connectionTest = ConnectionTestUiState(
+                        message = "请先填写 DeepSeek API Key。",
+                        isSuccess = false,
                     )
-                }
-                return
+                )
             }
-            val relayUrl = BaseUrlPolicy.normalizeHttps(
-                currentSettings.relayBaseUrl.ifBlank { AppSettings.RELAY_BASE_URL },
-            )
-            if (relayUrl == null) {
-                _uiState.update {
-                    it.copy(
-                        connectionTest = ConnectionTestUiState(
-                            message = "内置服务地址必须使用 HTTPS。",
-                            isSuccess = false,
-                        )
-                    )
-                }
-                return
-            }
-            AppSettings(
-                apiSource = ApiSource.BUILTIN,
-                sessionToken = currentSettings.sessionToken,
-                deviceId = currentSettings.deviceId,
-                relayBaseUrl = relayUrl,
-                thinkingLevel = thinkingLevel,
-            ).toLlmConfig()
-        } else {
-            val key = apiKey.trim()
-            if (key.isEmpty()) {
-                _uiState.update {
-                    it.copy(
-                        connectionTest = ConnectionTestUiState(
-                            message = "请先填写 DeepSeek API Key。",
-                            isSuccess = false,
-                        )
-                    )
-                }
-                return
-            }
-            val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
-            if (normalizedUrl == null) {
-                _uiState.update {
-                    it.copy(
-                        connectionTest = ConnectionTestUiState(
-                            message = "Base URL 必须使用 HTTPS（以 https:// 开头）。",
-                            isSuccess = false,
-                        )
-                    )
-                }
-                return
-            }
-            AppSettings(
-                apiKey = key,
-                model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
-                baseUrl = normalizedUrl,
-                thinkingLevel = thinkingLevel,
-            ).toLlmConfig()
+            return
         }
+        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
+        if (normalizedUrl == null) {
+            _uiState.update {
+                it.copy(
+                    connectionTest = ConnectionTestUiState(
+                        message = "Base URL 必须使用 HTTPS（以 https:// 开头）。",
+                        isSuccess = false,
+                    )
+                )
+            }
+            return
+        }
+        val config = AppSettings(
+            apiKey = key,
+            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
+            baseUrl = normalizedUrl,
+            thinkingLevel = thinkingLevel,
+        ).toLlmConfig()
         _uiState.update { it.copy(connectionTest = ConnectionTestUiState(isTesting = true)) }
         viewModelScope.launch {
             try {
@@ -1177,11 +1031,7 @@ class AppViewModel(
                     it.copy(
                         connectionTest = when (result) {
                             ConnectionTestResult.Success -> ConnectionTestUiState(
-                                message = if (apiSource == ApiSource.BUILTIN) {
-                                    "连接成功，内置服务可用。"
-                                } else {
-                                    "连接成功，API Key 可用。"
-                                },
+                                message = "连接成功，API Key 可用。",
                                 isSuccess = true,
                             )
                             is ConnectionTestResult.Failure -> ConnectionTestUiState(
@@ -1294,6 +1144,8 @@ class AppViewModel(
     }
 
     fun loadHistoryDetail(id: Long) {
+        val generation = ++historyDetailGeneration
+        historyDetailJob?.cancel()
         _uiState.update {
             it.copy(
                 historyDetail = null,
@@ -1301,7 +1153,7 @@ class AppViewModel(
                 historyDetailError = null,
             )
         }
-        viewModelScope.launch {
+        historyDetailJob = viewModelScope.launch {
             try {
                 val entity = container.consultationRepository.getById(id)
                     ?: throw IllegalStateException("这条问诊记录不存在或已被删除。")
@@ -1318,13 +1170,16 @@ class AppViewModel(
                     medicalRecord = entity.medicalRecord,
                     score = score,
                     initialDiagnosis = entity.initialDiagnosis,
+                    diagnosisBasis = entity.diagnosisBasis,
                     treatmentAnswer = entity.treatmentAnswer,
                     encounterType = encounterType,
                     messages = ConversationJsonCodec.decode(entity.conversationJson),
                     referenceCarePlan = medicalCase?.let {
                         ReferenceCarePlanBuilder.build(it, encounterType)
                     },
+                    isAiGeneratedCase = medicalCase?.isAiGenerated == true,
                 )
+                if (generation != historyDetailGeneration) return@launch
                 _uiState.update {
                     it.copy(
                         historyDetail = result,
@@ -1335,6 +1190,7 @@ class AppViewModel(
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (generation != historyDetailGeneration) return@launch
                 _uiState.update {
                     it.copy(
                         historyDetailLoading = false,

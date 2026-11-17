@@ -108,8 +108,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
             text = {
                 Text(
                     "本应用用于医学生问诊练习。问诊对话、病例生成、查体/检查请求、病历和评分会发送到你配置的 AI 服务；" +
-                        "使用内置服务时，请求还会经过中转服务器并携带随机设备标识。AI 生成内容可能有误，不构成医疗建议。" +
-                        "请勿输入真实患者身份信息或敏感个人资料。",
+                        "AI 生成内容可能有误，不构成医疗建议。请勿输入真实患者身份信息或敏感个人资料。",
                 )
             },
             confirmButton = {
@@ -176,7 +175,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
             }
             composable(Routes.HISTORY) {
                 HistoryScreen(
-                    records = uiState.filteredHistory,
+                    records = uiState.history,
                     isLoading = uiState.historyLoading,
                     errorMessage = uiState.historyError,
                     onRecordClick = { recordId ->
@@ -214,11 +213,6 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onDismissError = viewModel::clearSettingsSaveError,
                     onTestConnection = viewModel::testConnection,
                     connectionTest = uiState.connectionTest,
-                    isRedeemingInvite = uiState.isRedeemingInvite,
-                    redeemError = uiState.redeemError,
-                    onRedeemInvite = viewModel::redeemInvite,
-                    onClearRedeem = viewModel::clearInviteRedemption,
-                    onDismissRedeemError = viewModel::clearRedeemError,
                     onCheckUpdate = viewModel::checkForUpdate,
                     updateState = uiState.updateState,
                     onDownloadUpdate = viewModel::downloadUpdate,
@@ -248,7 +242,10 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         onFinish = {
                             navController.navigate(Routes.FINISH) { launchSingleTop = true }
                         },
-                        onBack = { navController.popBackStack() },
+                        onBack = {
+                            viewModel.flushDraft()
+                            navController.popBackStack()
+                        },
                         onOpenSettings = {
                             navController.navigate(Routes.SETTINGS) { launchSingleTop = true }
                         },
@@ -280,7 +277,10 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         caseTitle = medicalCase.title,
                         patientName = medicalCase.patient.name,
                         department = medicalCase.department,
-                        onBack = { navController.popBackStack() },
+                        onBack = {
+                            viewModel.flushDraft()
+                            navController.popBackStack()
+                        },
                         onSubmit = viewModel::finishConsultation,
                         initialGenerateRecord = uiState.settings.generateRecord,
                         thinkingLevel = uiState.settings.toLlmConfig().thinkingLevel,
@@ -313,9 +313,12 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         medicalRecord = result.medicalRecord,
                         score = result.score,
                         initialDiagnosis = result.initialDiagnosis,
+                        diagnosisBasis = result.diagnosisBasis,
+                        treatmentAnswer = result.treatmentAnswer,
                         messages = result.messages,
                         referenceCarePlan = result.referenceCarePlan,
                         notice = result.notice,
+                        isAiGenerated = result.isAiGeneratedCase,
                         onBack = { navController.popBackStack() },
                         onRegenerateAiComment = if (result.recordId > 0L) {
                             { viewModel.regenerateAiComment(result.recordId) }

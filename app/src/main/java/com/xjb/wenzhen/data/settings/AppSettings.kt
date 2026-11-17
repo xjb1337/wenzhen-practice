@@ -4,17 +4,6 @@ import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.ui.theme.AppTheme
 
-enum class ApiSource(val label: String) {
-    OWN_KEY("自己的 Key"),
-    BUILTIN("内置服务");
-
-    companion object {
-        fun from(value: String?): ApiSource = entries.firstOrNull {
-            it.name.equals(value?.trim(), ignoreCase = true) || it.label == value?.trim()
-        } ?: OWN_KEY
-    }
-}
-
 data class AppSettings(
     val apiKey: String = "",
     val model: String = MODEL_FLASH,
@@ -23,59 +12,26 @@ data class AppSettings(
     val generateRecord: Boolean = false,
     val offlineMode: Boolean = false,
     val theme: AppTheme = AppTheme.DEFAULT,
-    val apiSource: ApiSource = ApiSource.OWN_KEY,
-    val deviceId: String = "",
-    val sessionToken: String = "",
-    /** 内置服务会话过期时间（epoch 毫秒）；null 表示不限制。 */
-    val sessionExpiresAt: Long? = null,
-    /** 仅供测试注入，不持久化；生产环境始终使用 [RELAY_BASE_URL]。 */
-    val relayBaseUrl: String = RELAY_BASE_URL,
     /** 首启隐私与 AI 使用告知是否已确认。 */
     val privacyAccepted: Boolean = false,
 ) {
-    /** 历史上用于 AI 能力门禁；两种服务模式任一可用的凭据都会返回 true。 */
     val hasApiKey: Boolean
-        get() = when (apiSource) {
-            ApiSource.OWN_KEY -> apiKey.isNotBlank()
-            ApiSource.BUILTIN -> sessionToken.isNotBlank() && !isSessionExpired()
-        }
-
-    val inviteRedeemed: Boolean
-        get() = sessionToken.isNotBlank() && !isSessionExpired()
-
-    fun isSessionExpired(nowMillis: Long = System.currentTimeMillis()): Boolean =
-        sessionExpiresAt?.let { it <= nowMillis } ?: false
+        get() = apiKey.isNotBlank()
 
     val aiSetupMessage: String
-        get() = when (apiSource) {
-            ApiSource.OWN_KEY -> "请先在设置中填写 DeepSeek API Key。"
-            ApiSource.BUILTIN -> "请先在设置中兑换邀请码。"
-        }
+        get() = "请先在设置中填写 DeepSeek API Key。"
 
-    fun toLlmConfig(): LlmConfig = when (apiSource) {
-        ApiSource.OWN_KEY -> LlmConfig(
-            apiKey = apiKey.trim(),
-            model = model.ifBlank { MODEL_FLASH }.trim(),
-            baseUrl = baseUrl.ifBlank { DEFAULT_BASE_URL }.trim(),
-            thinkingLevel = thinkingLevel,
-        )
-        ApiSource.BUILTIN -> LlmConfig(
-            apiKey = sessionToken.trim(),
-            model = MODEL_FLASH,
-            baseUrl = relayBaseUrl.trim().ifBlank { RELAY_BASE_URL }.trimEnd('/'),
-            // 内置服务固定关闭思考模式；设置中保留的用户选择仅用于「自己的 Key」。
-            thinkingLevel = ThinkingLevel.OFF,
-            deviceId = deviceId.trim(),
-            useRelay = true,
-        )
-    }
+    fun toLlmConfig(): LlmConfig = LlmConfig(
+        apiKey = apiKey.trim(),
+        model = model.ifBlank { MODEL_FLASH }.trim(),
+        baseUrl = baseUrl.ifBlank { DEFAULT_BASE_URL }.trim(),
+        thinkingLevel = thinkingLevel,
+    )
 
     companion object {
         const val MODEL_FLASH = "deepseek-flash"
         const val MODEL_PRO = "deepseek-v4-pro"
         const val DEFAULT_BASE_URL = "https://api.deepseek.com"
-        // Worker 部署后替换此处（或后续迁到 BuildConfig）。说明见 docs/RELAY.md。
-        const val RELAY_BASE_URL = "https://wenzhen-relay.wenzhen-xjb1337.workers.dev"
     }
 }
 

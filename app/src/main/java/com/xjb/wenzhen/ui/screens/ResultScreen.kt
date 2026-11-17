@@ -1,7 +1,15 @@
 package com.xjb.wenzhen.ui.screens
 
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.data.model.ChatMessage
@@ -28,6 +36,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CheckCircle
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Lightbulb
 import androidx.compose.material.icons.outlined.LocalHospital
@@ -100,12 +109,48 @@ fun ResultScreen(
     messages: List<ChatMessage> = emptyList(),
     referenceCarePlan: ReferenceCarePlan? = null,
     notice: String? = null,
+    isAiGenerated: Boolean = false,
+    diagnosisBasis: String = "",
+    treatmentAnswer: String = "",
     onRegenerateAiComment: (() -> Unit)? = null,
     isRegeneratingAiComment: Boolean = false,
 ) {
     val tabs = availableResultTabs(hasRecord = medicalRecord.isNotBlank(), hasTranscript = messages.isNotEmpty())
     var selectedTabName by rememberSaveable { mutableStateOf(initialTab.name) }
     val selectedTab = tabs.firstOrNull { it.name == selectedTabName } ?: tabs.first()
+    val transcriptListState = rememberLazyListState()
+    var highlightedMessageIndex by remember { mutableStateOf<Int?>(null) }
+    val evidenceToMessageIndex = remember(messages) {
+        var transcriptNumber = 0
+        buildMap {
+            messages.forEachIndexed { messageIndex, message ->
+                if (!(message.role == MessageRole.DOCTOR && message.deliveryState != MessageDeliveryState.SENT)) {
+                    transcriptNumber += 1
+                    put(transcriptNumber, messageIndex)
+                }
+            }
+        }
+    }
+    val messageIndexToTranscriptNumber = remember(evidenceToMessageIndex) {
+        evidenceToMessageIndex.entries.associate { (transcriptNum, msgIdx) -> msgIdx to transcriptNum }
+    }
+    val canJumpToTranscript = ResultTab.TRANSCRIPT in tabs
+    val onEvidenceClick: ((Int) -> Unit)? = if (canJumpToTranscript) {
+        { evidenceIndex ->
+            evidenceToMessageIndex[evidenceIndex]?.let { targetIndex ->
+                highlightedMessageIndex = targetIndex
+                selectedTabName = ResultTab.TRANSCRIPT.name
+            }
+        }
+    } else {
+        null
+    }
+    LaunchedEffect(selectedTab, highlightedMessageIndex) {
+        val target = highlightedMessageIndex
+        if (selectedTab == ResultTab.TRANSCRIPT && target != null && target in messages.indices) {
+            transcriptListState.animateScrollToItem(target)
+        }
+    }
     val context = LocalContext.current
     val currentText = when (selectedTab) {
         ResultTab.RECORD -> medicalRecord
@@ -182,6 +227,7 @@ fun ResultScreen(
                 createdAt = createdAt,
                 initialDiagnosis = initialDiagnosis,
                 score = score,
+                isAiGenerated = isAiGenerated,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
             )
             if (!notice.isNullOrBlank()) {
@@ -204,6 +250,10 @@ fun ResultScreen(
                 ReviewTab(
                     score = score,
                     referenceCarePlan = referenceCarePlan,
+                    initialDiagnosis = initialDiagnosis,
+                    diagnosisBasis = diagnosisBasis,
+                    treatmentAnswer = treatmentAnswer,
+                    onEvidenceClick = onEvidenceClick,
                     modifier = Modifier.weight(1f),
                     onRegenerateAiComment = onRegenerateAiComment,
                     isRegeneratingAiComment = isRegeneratingAiComment,
@@ -244,11 +294,21 @@ fun ResultScreen(
                 ResultTab.REVIEW -> ReviewTab(
                     score = score,
                     referenceCarePlan = referenceCarePlan,
+                    initialDiagnosis = initialDiagnosis,
+                    diagnosisBasis = diagnosisBasis,
+                    treatmentAnswer = treatmentAnswer,
+                    onEvidenceClick = onEvidenceClick,
                     modifier = Modifier.weight(1f),
                     onRegenerateAiComment = onRegenerateAiComment,
                     isRegeneratingAiComment = isRegeneratingAiComment,
                 )
-                ResultTab.TRANSCRIPT -> TranscriptTab(messages = messages, modifier = Modifier.weight(1f))
+                ResultTab.TRANSCRIPT -> TranscriptTab(
+                    messages = messages,
+                    listState = transcriptListState,
+                    highlightedMessageIndex = highlightedMessageIndex,
+                    messageIndexToTranscriptNumber = messageIndexToTranscriptNumber,
+                    modifier = Modifier.weight(1f),
+                )
             }
         }
     }
@@ -264,6 +324,7 @@ private fun ResultHeader(
     initialDiagnosis: String,
     score: ScoreResult,
     modifier: Modifier = Modifier,
+    isAiGenerated: Boolean = false,
 ) {
     Box(
         modifier = modifier
@@ -280,7 +341,9 @@ private fun ResultHeader(
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                     HeaderTag(department)
                     HeaderTag(difficulty)
-                    HeaderTag("AI 生成")
+                    if (isAiGenerated) {
+                        HeaderTag("AI 生成")
+                    }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
@@ -383,14 +446,6 @@ private fun RecordTab(
                 }
             }
         }
-        item {
-            Text(
-                text = "病历由 AI 根据本次对话生成，未问及的内容已标注。内容仅用于问诊练习。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
-        }
     }
 }
 
@@ -432,6 +487,10 @@ private fun ReviewTab(
     score: ScoreResult,
     referenceCarePlan: ReferenceCarePlan?,
     modifier: Modifier = Modifier,
+    initialDiagnosis: String = "",
+    diagnosisBasis: String = "",
+    treatmentAnswer: String = "",
+    onEvidenceClick: ((Int) -> Unit)? = null,
     onRegenerateAiComment: (() -> Unit)? = null,
     isRegeneratingAiComment: Boolean = false,
 ) {
@@ -496,6 +555,14 @@ private fun ReviewTab(
             }
         }
         item {
+            MySubmissionCard(
+                initialDiagnosis = initialDiagnosis,
+                diagnosisBasis = diagnosisBasis,
+                treatmentAnswer = treatmentAnswer,
+                correctDiagnosis = referenceCarePlan?.diagnosis ?: score.correctDiagnosis,
+            )
+        }
+        item {
             if (referenceCarePlan != null) {
                 ReferenceCarePlanCard(referenceCarePlan)
             } else {
@@ -509,44 +576,20 @@ private fun ReviewTab(
             }
         }
         item {
-            ReviewListSection(
-                title = "已覆盖要点",
-                items = score.coveredPoints,
-                accent = TealPrimary,
-                icon = Icons.Outlined.CheckCircle,
-                emptyText = "本次对话未明确覆盖问诊要点。",
-            )
-        }
-        if (score.evidence.any { it.messageIndexes.isNotEmpty() }) {
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
-                    color = MaterialTheme.colorScheme.surface,
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text("评分证据链", style = MaterialTheme.typography.titleMedium)
-                        Text(
-                            "每个已覆盖问题都能回指到具体对话编号，可对照复核。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        score.evidence.filter { it.messageIndexes.isNotEmpty() }.forEach { item ->
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(item.question, style = MaterialTheme.typography.bodyMedium)
-                                Text(
-                                    item.messageIndexes.joinToString("、") { "第 $it 条" },
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = TealPrimary,
-                                )
-                            }
-                        }
-                    }
-                }
+            val evidenceItems = score.evidence.filter { it.messageIndexes.isNotEmpty() }
+            if (evidenceItems.isNotEmpty()) {
+                QuestionCoverageCard(
+                    evidenceItems = evidenceItems,
+                    onEvidenceClick = onEvidenceClick,
+                )
+            } else {
+                ReviewListSection(
+                    title = "已覆盖要点",
+                    items = score.coveredPoints,
+                    accent = TealPrimary,
+                    icon = Icons.Outlined.CheckCircle,
+                    emptyText = "本次对话未明确覆盖问诊要点。",
+                )
             }
         }
         item {
@@ -604,14 +647,6 @@ private fun ReviewTab(
                     )
                 }
             }
-        }
-        item {
-            Text(
-                text = "评分来自 AI 模拟反馈，建议结合带教老师意见复盘。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 4.dp),
-            )
         }
     }
 }
@@ -719,14 +754,11 @@ private fun ReferenceCarePlanCard(
                         modifier = Modifier.size(21.dp),
                     )
                 }
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("正确诊疗方案", style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        "依据本病例原始资料整理，供复盘对照",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
+                Text(
+                    text = "正确诊疗方案",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.weight(1f),
+                )
                 Surface(
                     shape = CircleShape,
                     color = TealContainer,
@@ -792,7 +824,7 @@ private fun ReferenceCarePlanCard(
             )
 
             Text(
-                text = "本方案由 AI 依据病例资料生成，不补写病例之外的信息；药物与剂量仅用于教学复盘，请勿直接用于真实患者，具体诊疗须由带教老师确认。",
+                text = "仅供教学复盘，不作为临床诊疗依据。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -894,7 +926,7 @@ private fun ReviewListSection(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             } else {
-                items.forEachIndexed { index, item ->
+                items.forEach { item ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -970,18 +1002,172 @@ internal fun reviewAsText(
 }
 
 @Composable
+private fun MySubmissionCard(
+    initialDiagnosis: String,
+    diagnosisBasis: String,
+    treatmentAnswer: String,
+    correctDiagnosis: String,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Text("我的作答对照", style = MaterialTheme.typography.titleMedium)
+            SubmissionField(
+                label = "我的初步诊断",
+                value = initialDiagnosis.ifBlank { "未填写" },
+                supportingNote = correctDiagnosis.takeIf { it.isNotBlank() }?.let { "标准诊断：$it" },
+            )
+            SubmissionField(
+                label = "诊断依据",
+                value = diagnosisBasis.ifBlank { "未填写" },
+            )
+            SubmissionField(
+                label = "治疗方案",
+                value = treatmentAnswer.ifBlank { "未填写" },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SubmissionField(
+    label: String,
+    value: String,
+    supportingNote: String? = null,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f), RoundedCornerShape(12.dp))
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(3.dp),
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelLarge,
+            color = TealPrimary,
+            fontWeight = FontWeight.SemiBold,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+        )
+        if (!supportingNote.isNullOrBlank()) {
+            Text(
+                text = supportingNote,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QuestionCoverageCard(
+    evidenceItems: List<com.xjb.wenzhen.domain.ScoreEvidence>,
+    onEvidenceClick: ((Int) -> Unit)?,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        color = MaterialTheme.colorScheme.surface,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(
+            modifier = Modifier.padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.CheckCircle,
+                    contentDescription = null,
+                    tint = TealPrimary,
+                    modifier = Modifier.size(20.dp),
+                )
+                Text("已覆盖要点与证据链", style = MaterialTheme.typography.titleMedium)
+            }
+            evidenceItems.forEach { item ->
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(item.question, style = MaterialTheme.typography.bodyMedium)
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        item.messageIndexes.forEach { msgIndex ->
+                            Surface(
+                                shape = CircleShape,
+                                color = TealContainer,
+                                modifier = if (onEvidenceClick != null) {
+                                    Modifier.clickable { onEvidenceClick(msgIndex) }
+                                } else {
+                                    Modifier
+                                },
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(
+                                        start = 10.dp,
+                                        end = if (onEvidenceClick != null) 6.dp else 10.dp,
+                                        top = 4.dp,
+                                        bottom = 4.dp,
+                                    ),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(2.dp),
+                                ) {
+                                    Text(
+                                        text = "第 $msgIndex 条",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TealPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    if (onEvidenceClick != null) {
+                                        Icon(
+                                            imageVector = Icons.Outlined.ChevronRight,
+                                            contentDescription = "跳转至第 $msgIndex 条消息",
+                                            tint = TealPrimary,
+                                            modifier = Modifier.size(14.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun TranscriptTab(
     messages: List<ChatMessage>,
     modifier: Modifier = Modifier,
+    listState: LazyListState = rememberLazyListState(),
+    highlightedMessageIndex: Int? = null,
+    messageIndexToTranscriptNumber: Map<Int, Int> = emptyMap(),
 ) {
     LazyColumn(
+        state = listState,
         modifier = modifier.fillMaxWidth(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 28.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        items(messages) { message ->
+        itemsIndexed(messages) { index, message ->
             val isDoctor = message.role == MessageRole.DOCTOR
             val isSystem = message.role == MessageRole.SYSTEM
+            val isHighlighted = index == highlightedMessageIndex
+            val transcriptNumber = messageIndexToTranscriptNumber[index]
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalAlignment = when {
@@ -991,18 +1177,26 @@ private fun TranscriptTab(
                 },
             ) {
                 Text(
-                    text = "${transcriptSpeaker(message)} · ${transcriptTime(message.timestamp)}",
+                    text = buildString {
+                        transcriptNumber?.let { append("#$it · ") }
+                        append(transcriptSpeaker(message))
+                        append(" · ")
+                        append(transcriptTime(message.timestamp))
+                    },
                     style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    color = if (isHighlighted) TealPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (isHighlighted) FontWeight.Bold else FontWeight.Normal,
                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
                 )
                 Surface(
                     shape = RoundedCornerShape(16.dp),
                     color = when {
+                        isHighlighted -> TealContainer.copy(alpha = 0.55f)
                         isSystem -> MaterialTheme.colorScheme.secondaryContainer
                         isDoctor -> MaterialTheme.colorScheme.primaryContainer
                         else -> MaterialTheme.colorScheme.surfaceVariant
                     },
+                    border = if (isHighlighted) BorderStroke(2.dp, TealPrimary) else null,
                     modifier = Modifier.fillMaxWidth(if (isSystem) 1f else 0.85f),
                 ) {
                     Text(

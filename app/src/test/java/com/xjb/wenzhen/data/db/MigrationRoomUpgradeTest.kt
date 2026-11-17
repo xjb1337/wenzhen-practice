@@ -16,8 +16,8 @@ import org.robolectric.annotation.Config
 /**
  * 走真实 Room 升级路径的回归测试。
  *
- * 与 [MigrationExecutionTest] 直接 `execSQL` 不同，本测试让 Room 自己执行 onUpgrade：
- * 迁移完成后 Room 会调用 onValidateSchema 用 TableInfo 逐列比对实体与真实表结构。
+ * 让 Room 自己执行 onUpgrade：迁移完成后 Room 会调用 onValidateSchema 用 TableInfo
+ * 逐列比对实体与真实表结构。
  *
  * P0-2 的现场是 `MIGRATION_4_5_SQL` 曾给 favorite 加了 `DEFAULT 0`，而实体没有
  * `@ColumnInfo(defaultValue = "0")`。实测 Room 2.6.1 的 TableInfo.Column.equals 只在实体侧
@@ -41,20 +41,46 @@ class MigrationRoomUpgradeTest {
     }
 
     @Test
+    fun `v1数据库经Room一路升级到v6通过结构校验并保留旧记录`() {
+        createVersion1Database()
+
+        val room = buildRoomDatabase()
+        try {
+            val database = room.openHelper.writableDatabase
+            assertEquals(6, database.version)
+
+            database.query(
+                "SELECT caseTitle, totalScore, patientPersonality, encounterType, treatmentAnswer, recordType FROM consultations",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("v1记录", cursor.getString(0))
+                assertEquals(80, cursor.getInt(1))
+                assertEquals("COOPERATIVE", cursor.getString(2))
+                assertEquals("OUTPATIENT", cursor.getString(3))
+                assertEquals("", cursor.getString(4))
+                assertEquals("INPATIENT", cursor.getString(5))
+                assertEquals(1, cursor.count)
+            }
+
+            database.execSQL(
+                "INSERT INTO consultation_drafts (id, caseJson, conversationJson, patientPersonality, encounterType, startedAt, updatedAt) " +
+                    "VALUES (1, '{}', '[]', 'COOPERATIVE', 'OUTPATIENT', 1, 2)",
+            )
+            database.query("SELECT id FROM consultation_drafts").use { cursor ->
+                assertEquals(1, cursor.count)
+            }
+
+            assertCreatedAtIndexExists(database)
+        } finally {
+            room.close()
+        }
+    }
+
+    @Test
     fun `v4数据库经Room升级到v6通过结构校验并保留旧记录`() {
         createVersion4Database()
 
-        val room = Room.databaseBuilder(context, AppDatabase::class.java, DB_NAME)
-            .addMigrations(
-                AppDatabase.MIGRATION_1_2,
-                AppDatabase.MIGRATION_2_3,
-                AppDatabase.MIGRATION_3_4,
-                AppDatabase.MIGRATION_4_5,
-                AppDatabase.MIGRATION_5_6,
-            )
-            .allowMainThreadQueries()
-            .build()
-
+        val room = buildRoomDatabase()
         try {
             // 访问 writableDatabase 会触发 onUpgrade → 依次执行 4→5、5→6 → onValidateSchema。
             val database = room.openHelper.writableDatabase
@@ -77,6 +103,8 @@ class MigrationRoomUpgradeTest {
                 assertEquals(null, favoriteDefault)
             }
 
+            assertCreatedAtIndexExists(database)
+
             database.query("SELECT caseTitle, totalScore FROM consultations").use { cursor ->
                 assertTrue(cursor.moveToFirst())
                 assertEquals("旧记录", cursor.getString(0))
@@ -96,11 +124,8 @@ class MigrationRoomUpgradeTest {
         }
     }
 
-    @Test
-    fun `v5数据库经Room升级到v6创建createdAt索引并保留旧记录`() {
-        createVersion5Database()
-
-        val room = Room.databaseBuilder(context, AppDatabase::class.java, DB_NAME)
+    private fun buildRoomDatabase(): AppDatabase =
+        Room.databaseBuilder(context, AppDatabase::class.java, DB_NAME)
             .addMigrations(
                 AppDatabase.MIGRATION_1_2,
                 AppDatabase.MIGRATION_2_3,
@@ -111,28 +136,31 @@ class MigrationRoomUpgradeTest {
             .allowMainThreadQueries()
             .build()
 
+    private fun assertCreatedAtIndexExists(database: androidx.sqlite.db.SupportSQLiteDatabase) {
+        var indexFound = false
+        database.query("PRAGMA index_list(consultations)").use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
+                if (name == "index_consultations_createdAt") indexFound = true
+            }
+        }
+        assertTrue("缺少 index_consultations_createdAt 索引", indexFound)
+    }
+
+    private fun createVersion1Database() {
+        val dbFile = context.getDatabasePath(DB_NAME)
+        dbFile.parentFile?.mkdirs()
+        val db = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
         try {
-            // 访问 writableDatabase 会触发 onUpgrade → 执行 5→6 → onValidateSchema。
-            val database = room.openHelper.writableDatabase
-            assertEquals(6, database.version)
-
-            var indexFound = false
-            database.query("PRAGMA index_list(consultations)").use { cursor ->
-                while (cursor.moveToNext()) {
-                    val name = cursor.getString(cursor.getColumnIndexOrThrow("name"))
-                    if (name == "index_consultations_createdAt") indexFound = true
-                }
-            }
-            assertTrue("缺少 index_consultations_createdAt 索引", indexFound)
-
-            database.query("SELECT caseTitle, totalScore FROM consultations").use { cursor ->
-                assertTrue(cursor.moveToFirst())
-                assertEquals("旧记录", cursor.getString(0))
-                assertEquals(82, cursor.getInt(1))
-                assertEquals(1, cursor.count)
-            }
+            db.execSQL(V1_CONSULTATIONS_SQL)
+            db.execSQL(
+                "INSERT INTO consultations (caseTitle, department, difficulty, patientName, caseJson, " +
+                    "conversationJson, medicalRecord, scoreJson, totalScore, initialDiagnosis, diagnosisBasis, " +
+                    "createdAt) VALUES ('v1记录','心内科','中等','王建国','{}','[]','病历','{}',80,'STEMI','心电图',100)",
+            )
+            db.version = 1
         } finally {
-            room.close()
+            db.close()
         }
     }
 
@@ -154,27 +182,15 @@ class MigrationRoomUpgradeTest {
         }
     }
 
-    private fun createVersion5Database() {
-        val dbFile = context.getDatabasePath(DB_NAME)
-        dbFile.parentFile?.mkdirs()
-        val db = SQLiteDatabase.openOrCreateDatabase(dbFile, null)
-        try {
-            db.execSQL(V4_CONSULTATIONS_SQL)
-            db.execSQL(AppDatabase.MIGRATION_3_4_SQL)
-            db.execSQL(AppDatabase.MIGRATION_4_5_SQL)
-            db.execSQL(
-                "INSERT INTO consultations (caseTitle, department, difficulty, patientName, caseJson, " +
-                    "conversationJson, medicalRecord, scoreJson, totalScore, initialDiagnosis, diagnosisBasis, " +
-                    "createdAt) VALUES ('旧记录','心内科','中等','王建国','{}','[]','病历','{}',82,'STEMI','心电图',123)",
-            )
-            db.version = 5
-        } finally {
-            db.close()
-        }
-    }
-
     private companion object {
         const val DB_NAME = "migration-room-upgrade-test.db"
+
+        const val V1_CONSULTATIONS_SQL =
+            "CREATE TABLE IF NOT EXISTS `consultations` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, " +
+                "`caseTitle` TEXT NOT NULL, `department` TEXT NOT NULL, `difficulty` TEXT NOT NULL, " +
+                "`patientName` TEXT NOT NULL, `caseJson` TEXT NOT NULL, `conversationJson` TEXT NOT NULL, " +
+                "`medicalRecord` TEXT NOT NULL, `scoreJson` TEXT NOT NULL, `totalScore` INTEGER NOT NULL, " +
+                "`initialDiagnosis` TEXT NOT NULL, `diagnosisBasis` TEXT NOT NULL, `createdAt` INTEGER NOT NULL)"
 
         /** 与 5.json 中 consultations 的 createSql 完全一致（v4 时 consultations 已是该结构）。 */
         const val V4_CONSULTATIONS_SQL =

@@ -36,8 +36,8 @@ abstract class AppDatabase : RoomDatabase() {
             "ALTER TABLE consultations ADD COLUMN patientPersonality TEXT NOT NULL DEFAULT 'COOPERATIVE'"
 
         val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(MIGRATION_1_2_SQL)
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_1_2_SQL)
             }
         }
 
@@ -45,17 +45,17 @@ abstract class AppDatabase : RoomDatabase() {
         const val MIGRATION_2_3_SQL_TREATMENT = "ALTER TABLE consultations ADD COLUMN treatmentAnswer TEXT NOT NULL DEFAULT ''"
         const val MIGRATION_2_3_SQL_RECORD = "ALTER TABLE consultations ADD COLUMN recordType TEXT NOT NULL DEFAULT 'INPATIENT'"
         val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(MIGRATION_2_3_SQL)
-                database.execSQL(MIGRATION_2_3_SQL_TREATMENT)
-                database.execSQL(MIGRATION_2_3_SQL_RECORD)
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_2_3_SQL)
+                db.execSQL(MIGRATION_2_3_SQL_TREATMENT)
+                db.execSQL(MIGRATION_2_3_SQL_RECORD)
             }
         }
 
         const val MIGRATION_3_4_SQL = "CREATE TABLE IF NOT EXISTS consultation_drafts (id INTEGER NOT NULL, caseJson TEXT NOT NULL, conversationJson TEXT NOT NULL, patientPersonality TEXT NOT NULL, encounterType TEXT NOT NULL, startedAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, PRIMARY KEY(id))"
         val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(MIGRATION_3_4_SQL)
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_3_4_SQL)
             }
         }
 
@@ -66,8 +66,8 @@ abstract class AppDatabase : RoomDatabase() {
         // favorite 由实体默认值在每次写入时提供，数据库层面不需要默认值。
         const val MIGRATION_4_5_SQL = "CREATE TABLE IF NOT EXISTS saved_cases (id TEXT NOT NULL, caseJson TEXT NOT NULL, createdAt INTEGER NOT NULL, favorite INTEGER NOT NULL, PRIMARY KEY(id))"
         val MIGRATION_4_5 = object : Migration(4, 5) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(MIGRATION_4_5_SQL)
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_4_5_SQL)
             }
         }
 
@@ -76,8 +76,8 @@ abstract class AppDatabase : RoomDatabase() {
         const val MIGRATION_5_6_SQL =
             "CREATE INDEX IF NOT EXISTS index_consultations_createdAt ON consultations(createdAt)"
         val MIGRATION_5_6 = object : Migration(5, 6) {
-            override fun migrate(database: SupportSQLiteDatabase) {
-                database.execSQL(MIGRATION_5_6_SQL)
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(MIGRATION_5_6_SQL)
             }
         }
     }

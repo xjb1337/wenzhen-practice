@@ -28,11 +28,13 @@ data class ResultViewData(
     val medicalRecord: String,
     val score: ScoreResult,
     val initialDiagnosis: String,
+    val diagnosisBasis: String = "",
     val treatmentAnswer: String = "",
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
     val messages: List<ChatMessage> = emptyList(),
     val referenceCarePlan: ReferenceCarePlan? = null,
     val notice: String? = null,
+    val isAiGeneratedCase: Boolean = false,
 )
 
 data class AppUiState(
@@ -69,8 +71,6 @@ data class AppUiState(
     val historyDetailLoading: Boolean = false,
     val historyDetailError: String? = null,
     val settingsSaveError: String? = null,
-    val isRedeemingInvite: Boolean = false,
-    val redeemError: String? = null,
     val connectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val updateState: UpdateUiState = UpdateUiState.Idle,
 ) {

@@ -19,7 +19,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.BarChart
-import androidx.compose.material.icons.outlined.LocalHospital
+import androidx.compose.material.icons.outlined.ChevronRight
 import androidx.compose.material.icons.outlined.TrendingUp
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -64,10 +64,7 @@ fun StatsScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            WenzhenTopBar(
-                title = "成绩统计",
-                subtitle = "看见进步，也看见遗漏",
-            )
+            WenzhenTopBar(title = "成绩统计")
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
@@ -107,7 +104,6 @@ fun StatsScreen(
                 item { ScoreTrendCard(points = stats.trend) }
                 item { DepartmentAverageCard(items = stats.departmentAverages, onDepartmentClick = onDepartmentClick) }
                 item { MissedQuestionsCard(items = stats.topMissedQuestions) }
-                item { StatsFootnote() }
             }
         }
     }
@@ -192,7 +188,7 @@ private fun HeroMetric(
 
 @Composable
 private fun ScoreTrendCard(points: List<ScoreTrendPoint>) {
-    StatsCard(title = "历史成绩趋势", subtitle = "按完成时间从早到晚") {
+    StatsCard(title = "历史成绩趋势", subtitle = "近 ${points.size} 次") {
         ScoreTrendChart(points = points)
         if (points.isNotEmpty()) {
             Row(
@@ -273,7 +269,7 @@ private fun DepartmentAverageCard(
     items: List<DepartmentAverage>,
     onDepartmentClick: (String) -> Unit = {},
 ) {
-    StatsCard(title = "各科室平均分", subtitle = "按平均分从高到低，点击查看该科室历史") {
+    StatsCard(title = "各科室平均分", subtitle = "${items.size} 个科室") {
         Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             items.forEach { item ->
                 Column(
@@ -294,6 +290,13 @@ private fun DepartmentAverageCard(
                             text = "${formatScore(item.averageScore)} 分 · ${item.attempts} 次",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Spacer(modifier = Modifier.size(2.dp))
+                        Icon(
+                            imageVector = Icons.Outlined.ChevronRight,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                     Box(
@@ -364,33 +367,6 @@ private fun MissedQuestionsCard(items: List<MissedQuestionCount>) {
 }
 
 @Composable
-private fun StatsFootnote() {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
-        color = BlueSoft.copy(alpha = 0.55f),
-    ) {
-        Row(
-            modifier = Modifier.padding(13.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Icon(
-                imageVector = Icons.Outlined.LocalHospital,
-                contentDescription = null,
-                tint = TealPrimary,
-                modifier = Modifier.size(18.dp),
-            )
-            Text(
-                text = "统计来自已保存的问诊记录；继续练习会实时更新。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-    }
-}
-
-@Composable
 private fun StatsCard(
     title: String,
     subtitle: String,
@@ -423,4 +399,4 @@ private fun StatsCard(
 }
 
 private fun formatScore(value: Double): String =
-    if (value % 1.0 == 0.0) value.toInt().toString() else String.format("%.1f", value)
+    if (value % 1.0 == 0.0) value.toInt().toString() else String.format(java.util.Locale.ROOT, "%.1f", value)

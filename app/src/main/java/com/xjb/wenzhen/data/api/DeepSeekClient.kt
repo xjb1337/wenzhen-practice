@@ -31,7 +31,6 @@ import java.util.concurrent.TimeUnit
 class DeepSeekClient(
     private val httpClient: OkHttpClient = defaultHttpClient(),
     private val enforceHttps: Boolean = true,
-    private val relayClient: RelayClient = RelayClient(httpClient, enforceHttps),
 ) : LlmClient {
 
     override suspend fun complete(
@@ -54,7 +53,7 @@ class DeepSeekClient(
                 return@withContext executeCall(httpClientFor(config).newCall(request)) { response ->
                     val body = response.body?.string().orEmpty()
                     if (!response.isSuccessful) {
-                        throw httpException(response, body, config.useRelay)
+                        throw httpException(response, body)
                     }
                     parseContent(body)
                 }
@@ -62,7 +61,7 @@ class DeepSeekClient(
                 throw error
             } catch (error: LlmException) {
                 lastError = error
-                if (attempt < MAX_ATTEMPTS && shouldRetry(config, error)) {
+                if (attempt < MAX_ATTEMPTS && shouldRetry(error)) {
                     delay(retryDelayMillis(attempt, error))
                 } else {
                     throw error
@@ -77,7 +76,7 @@ class DeepSeekClient(
                     kind = networkErrorKind(error),
                 )
                 lastError = typed
-                if (attempt < MAX_ATTEMPTS && shouldRetry(config, typed)) {
+                if (attempt < MAX_ATTEMPTS && shouldRetry(typed)) {
                     delay(retryDelayMillis(attempt, typed))
                 } else {
                     throw typed
@@ -102,7 +101,6 @@ class DeepSeekClient(
                     throw httpException(
                         response,
                         response.body?.string().orEmpty(),
-                        config.useRelay,
                     )
                 }
                 val source = response.body?.source()
@@ -152,22 +150,7 @@ class DeepSeekClient(
     override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
         withContext(Dispatchers.IO) {
             if (config.apiKey.isBlank()) {
-                return@withContext ConnectionTestResult.Failure(
-                    if (config.useRelay) "请先兑换邀请码。" else "请先填写 DeepSeek API Key。",
-                )
-            }
-            if (config.useRelay) {
-                // health 只说明服务是否开启，并不校验会话；Healthy 后继续用 1-token ping 验证 token。
-                when (val health = relayClient.checkHealth(
-                    baseUrl = config.baseUrl,
-                    sessionToken = config.apiKey,
-                    deviceId = config.deviceId,
-                )) {
-                    RelayHealthResult.Healthy -> Unit
-                    RelayHealthResult.Missing -> Unit
-                    is RelayHealthResult.Failure ->
-                        return@withContext ConnectionTestResult.Failure(health.message)
-                }
+                return@withContext ConnectionTestResult.Failure("请先填写 DeepSeek API Key。")
             }
             val payload = JSONObject().apply {
                 put("model", config.model)
@@ -189,20 +172,23 @@ class DeepSeekClient(
                 )
             }
             try {
-                httpClient.newCall(request).execute().use { response ->
+                executeCall(httpClient.newCall(request)) { response ->
                     val body = response.body?.string().orEmpty()
                     if (response.isSuccessful) {
                         ConnectionTestResult.Success
                     } else {
                         ConnectionTestResult.Failure(
-                            message = httpErrorMessage(response.code, body, config.useRelay),
-                            kind = httpErrorKind(response.code, body, config.useRelay),
+                            message = httpErrorMessage(response.code, body),
+                            kind = httpErrorKind(response.code),
                         )
                     }
                 }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
+                if (!currentCoroutineContext().isActive) {
+                    throw CancellationException("请求已取消", error)
+                }
                 ConnectionTestResult.Failure(networkErrorMessage(error))
             }
         }
@@ -235,18 +221,13 @@ class DeepSeekClient(
             .url(completionUrl(config))
             .header("Authorization", "Bearer ${config.apiKey}")
             .header("Accept", accept)
-            .apply {
-                if (config.deviceId.isNotBlank() || config.useRelay) {
-                    header("X-Device-Id", config.deviceId.trim())
-                }
-            }
             .post(payload.toString().toRequestBody(JSON_MEDIA_TYPE))
             .build()
 
     private fun requireApiKey(config: LlmConfig) {
         if (config.apiKey.isBlank()) {
             throw LlmException(
-                message = if (config.useRelay) "请先兑换邀请码。" else "请先在设置中填写 DeepSeek API Key。",
+                message = "请先在设置中填写 DeepSeek API Key。",
                 kind = LlmErrorKind.AUTH,
             )
         }
@@ -290,10 +271,7 @@ class DeepSeekClient(
         }
     }
 
-    private fun httpErrorMessage(code: Int, body: String, useRelay: Boolean = false): String {
-        if (useRelay) {
-            return RelayErrorParser.messageFromBody(body, code)
-        }
+    private fun httpErrorMessage(code: Int, body: String): String {
         val providerMessage = runCatching {
             JSONObject(body).optJSONObject("error")?.optString("message").orEmpty()
         }.getOrDefault("").take(240)
@@ -307,11 +285,11 @@ class DeepSeekClient(
         }
     }
 
-    private fun httpException(response: Response, body: String, useRelay: Boolean): LlmException {
+    private fun httpException(response: Response, body: String): LlmException {
         val code = response.code
         return LlmException(
-            message = httpErrorMessage(code, body, useRelay),
-            kind = httpErrorKind(code, body, useRelay),
+            message = httpErrorMessage(code, body),
+            kind = httpErrorKind(code),
             retryAfterMillis = response.header("Retry-After")
                 ?.trim()
                 ?.toLongOrNull()
@@ -319,20 +297,14 @@ class DeepSeekClient(
         )
     }
 
-    private fun httpErrorKind(code: Int, body: String, useRelay: Boolean): LlmErrorKind {
-        val relayCode = if (useRelay) RelayErrorParser.codeFromBody(body) else null
-        return when {
-            relayCode == "quota_device" || relayCode == "quota_spend" -> LlmErrorKind.QUOTA
-            relayCode == "invite_used" || relayCode == "invite_invalid" -> LlmErrorKind.AUTH
-            relayCode == "relay_disabled" -> LlmErrorKind.SERVICE_DISABLED
-            code == 401 || code == 403 -> LlmErrorKind.AUTH
-            code == 402 -> LlmErrorKind.QUOTA
-            code == 429 -> LlmErrorKind.RATE_LIMITED
-            code == 408 -> LlmErrorKind.TIMEOUT
-            code >= 500 -> LlmErrorKind.SERVER_UNAVAILABLE
-            code >= 400 -> LlmErrorKind.BAD_REQUEST
-            else -> LlmErrorKind.UNKNOWN
-        }
+    private fun httpErrorKind(code: Int): LlmErrorKind = when {
+        code == 401 || code == 403 -> LlmErrorKind.AUTH
+        code == 402 -> LlmErrorKind.QUOTA
+        code == 429 -> LlmErrorKind.RATE_LIMITED
+        code == 408 -> LlmErrorKind.TIMEOUT
+        code >= 500 -> LlmErrorKind.SERVER_UNAVAILABLE
+        code >= 400 -> LlmErrorKind.BAD_REQUEST
+        else -> LlmErrorKind.UNKNOWN
     }
 
     private fun networkErrorMessage(error: Exception): String = when (networkErrorKind(error)) {
@@ -363,12 +335,7 @@ class DeepSeekClient(
         else -> LlmErrorKind.UNKNOWN
     }
 
-    /**
-     * Relay 的 5xx 可能已把请求转给上游并记账，重试会造成重复扣额度，因此不自动重试；
-     * NETWORK（连接阶段失败，请求未到服务端）和 RATE_LIMITED 仍按原策略重试。
-     */
-    private fun shouldRetry(config: LlmConfig, error: LlmException): Boolean =
-        error.retryable && !(config.useRelay && error.kind == LlmErrorKind.SERVER_UNAVAILABLE)
+    private fun shouldRetry(error: LlmException): Boolean = error.retryable
 
     private fun retryDelayMillis(attempt: Int, error: LlmException): Long =
         (error.retryAfterMillis ?: (800L * attempt)).coerceIn(0L, 10_000L)
@@ -400,9 +367,6 @@ class DeepSeekClient(
         }
 
     private fun completionUrl(config: LlmConfig): String {
-        if (config.useRelay) {
-            return RelayEndpoints.chatCompletions(config.baseUrl, enforceHttps)
-        }
         val base = config.baseUrl.trim().ifBlank { "https://api.deepseek.com" }.trimEnd('/')
         if (enforceHttps && !base.startsWith("https://", ignoreCase = true)) {
             throw LlmException("接口地址必须以 https:// 开头，以免 API Key 明文传输。")

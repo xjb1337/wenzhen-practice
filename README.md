@@ -52,30 +52,6 @@ https://github.com/xjb1337/wenzhen-practice/releases/latest/download/update.json
 https://github.com/xjb1337/wenzhen-practice/releases/download/vX/wenzhen-practice.apk
 ```
 
-## 截图
-
-Roborazzi 截图测试会把图片写入：
-
-```text
-app/build/outputs/roborazzi/
-```
-
-包含以下页面：
-
-- `case_library.png`：病例列表
-- `history_empty.png`：空历史记录
-- `chat.png`：问诊对话
-- `chat_coverage_hint.png`：展开的问诊提示与计时器
-- `chat_clinical_result.png`：查体结果系统卡片
-- `settings.png`：设置页（API Key 默认遮罩）
-- `settings_key_guide.png`：展开的 API Key 获取引导
-- `settings_connection_success.png`：测试连接成功
-- `stats.png`：成绩统计页
-- `update_dialog.png`：更新说明对话框
-- `finish_consultation.png`：结束问诊与填写诊断
-- `result_record.png`：结果页「病历」Tab
-- `result_review.png`：结果页「点评」Tab
-
 ## 构建与测试
 
 环境要求：JDK 17、Android SDK 35。项目使用 Gradle 8.9、AGP 8.7.3、Kotlin 1.9.24、Compose Compiler 1.5.14。
@@ -113,8 +89,7 @@ app/build/outputs/apk/debug/app-debug.apk
 - `BuiltInCasesTest`：至少 54 个病例、全部 30 科室覆盖、字段完整性和治疗方案非空。
 - `CaseGenerationDepartmentsTest`：AI 生成科室 54 项清单、8 个系统分组、内置 30 科全覆盖、症候提示三段式与颜色映射一致性。
 - `RecordParserTest`：门诊/住院病历小节及学生治疗内容校验。
-- `MigrationSqlTest`：Room v1→v2、v2→v3 迁移 SQL 与版本注册。
-- `ScreenshotTest`：Robolectric 34 + Roborazzi 页面截图，含设置引导、连接成功、覆盖提示、查体卡片、统计页和更新对话框。
+- `MigrationRoomUpgradeTest`：Room v1→v6、v4→v6 真实升级路径与表结构校验。
 
 ## 项目结构
 
@@ -138,17 +113,17 @@ com.xjb.wenzhen
 1. 打开应用底部「设置」。
 2. 展开「如何获取 DeepSeek API Key」，按引导打开 `platform.deepseek.com`，注册登录并充值。
 3. 在左侧菜单进入 API keys，创建并复制 Key；完整 Key 通常只显示一次。
-4. 回到设置页粘贴 Key，选择模型和 Base URL 后保存。
+4. 回到设置页粘贴 Key，选择模型和思考强度后保存。
 5. 点击「测试连接」确认 Key、余额、限流和网络状态。
-6. Base URL 默认是 `https://api.deepseek.com`，客户端会调用 `/chat/completions`（OpenAI 兼容格式）。
+6. 默认连接 DeepSeek 官方接口（`https://api.deepseek.com`）。
 
 应用不内置任何 API Key。
 
 ## 隐私说明
 
 - **首次启动告知**：首次打开应用会显示隐私与 AI 使用说明，确认后才能进入主界面。
-- **API Key 仅保存在本机**：使用 Android Keystore 支持的加密存储（`EncryptedSharedPreferences`，security-crypto 1.1.0），界面默认遮罩显示，应用不打印 Key 或请求头日志。设备标识单独保存在普通 SharedPreferences 中，即使加密存储损坏也不会变化。
-- **对话会发送到 AI 服务**：患者对话、生成病例指令、查体/检查请求、病历与评分请求会发送到用户配置的 DeepSeek Base URL（或内置中转地址）。使用内置服务时，请求会经过 Cloudflare Worker 中转，并携带随机 `X-Device-Id` 用于按设备计额度；中转部署与接口契约见 `docs/RELAY.md`。请勿输入真实患者身份信息或敏感个人资料。
+- **API Key 仅保存在本机**：使用 Android Keystore 支持的加密存储（`EncryptedSharedPreferences`，security-crypto 1.1.0），界面默认遮罩显示，应用不打印 Key 或请求头日志。
+- **对话会发送到 AI 服务**：患者对话、生成病例指令、查体/检查请求、病历与评分请求会发送到用户配置的 DeepSeek Base URL。请勿输入真实患者身份信息或敏感个人资料。
 - **本地历史记录**：病例、对话、病历和评分保存在本机 Room 数据库中；应用不包含广告、分析或第三方追踪 SDK。
 - **关闭云备份**：应用已禁用 Android 自动备份，避免加密设置被意外同步。
 - **更新校验**：仅接受 GitHub Releases 地址的 APK，并在安装前校验 SHA-256 和签名证书。

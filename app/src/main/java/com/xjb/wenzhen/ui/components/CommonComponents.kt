@@ -1,6 +1,7 @@
 package com.xjb.wenzhen.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -143,7 +144,7 @@ fun LoadingState(
 fun EmptyState(
     icon: ImageVector,
     title: String,
-    description: String,
+    description: String? = null,
     modifier: Modifier = Modifier,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
@@ -173,13 +174,15 @@ fun EmptyState(
             style = MaterialTheme.typography.titleMedium,
             textAlign = TextAlign.Center,
         )
-        Spacer(modifier = Modifier.height(8.dp))
-        Text(
-            text = description,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
+        if (!description.isNullOrBlank()) {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                text = description,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = TextAlign.Center,
+            )
+        }
         if (actionLabel != null && onAction != null) {
             Spacer(modifier = Modifier.height(20.dp))
             Button(onClick = onAction) {
@@ -250,15 +253,16 @@ fun DifficultyBadge(
     difficulty: Difficulty,
     modifier: Modifier = Modifier,
 ) {
+    val dark = isSystemInDarkTheme()
     val background = when (difficulty) {
         Difficulty.EASY -> TealContainer
         Difficulty.MEDIUM -> BlueSoft
-        Difficulty.HARD -> IndigoSoft
+        Difficulty.HARD -> if (dark) Color(0xFF27305A) else IndigoSoft
     }
     val foreground = when (difficulty) {
-        Difficulty.EASY -> Color(0xFF00695C)
-        Difficulty.MEDIUM -> Color(0xFF006064)
-        Difficulty.HARD -> Color(0xFF3949AB)
+        Difficulty.EASY -> if (dark) Color(0xFF80CBC4) else Color(0xFF00695C)
+        Difficulty.MEDIUM -> if (dark) Color(0xFF80DEEA) else Color(0xFF006064)
+        Difficulty.HARD -> if (dark) Color(0xFFC5CAE9) else Color(0xFF3949AB)
     }
     Text(
         text = difficulty.label,

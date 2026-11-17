@@ -28,7 +28,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.LocalHospital
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SearchOff
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -36,7 +38,9 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -74,6 +78,12 @@ import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 
+private enum class CaseLibraryFilter(val label: String) {
+    ALL("全部"),
+    FAVORITE("收藏"),
+    AI("AI 生成"),
+}
+
 @Composable
 fun CaseLibraryScreen(
     cases: List<MedicalCase>,
@@ -102,14 +112,29 @@ fun CaseLibraryScreen(
 ) {
     var showGenerateDialog by rememberSaveable { mutableStateOf(false) }
     var personalityCaseId by rememberSaveable { mutableStateOf<String?>(null) }
+    var searchQuery by rememberSaveable { mutableStateOf("") }
+    var libraryFilter by rememberSaveable { mutableStateOf(CaseLibraryFilter.ALL) }
+    var pendingDeleteCaseId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    val normalizedQuery = searchQuery.trim()
+    val visibleCases = cases.filter { medicalCase ->
+        val filterMatch = when (libraryFilter) {
+            CaseLibraryFilter.ALL -> true
+            CaseLibraryFilter.FAVORITE -> medicalCase.id in favoriteCaseIds
+            CaseLibraryFilter.AI -> medicalCase.isAiGenerated || medicalCase.id in savedCaseIds
+        }
+        val queryMatch = normalizedQuery.isEmpty() ||
+            medicalCase.title.contains(normalizedQuery, ignoreCase = true) ||
+            medicalCase.department.contains(normalizedQuery, ignoreCase = true) ||
+            medicalCase.patientSummary.contains(normalizedQuery, ignoreCase = true) ||
+            medicalCase.openingLine.contains(normalizedQuery, ignoreCase = true)
+        filterMatch && queryMatch
+    }
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            WenzhenTopBar(
-                title = "病例库",
-                subtitle = "从一次真实感的问诊开始",
-            )
+            WenzhenTopBar(title = "病例库")
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
@@ -181,10 +206,38 @@ fun CaseLibraryScreen(
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
-                                text = "${cases.size} 例可用",
+                                text = "${visibleCases.size} 例可用",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
+                        }
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("搜索病例标题、科室或症状…") },
+                            leadingIcon = {
+                                Icon(Icons.Outlined.Search, contentDescription = null)
+                            },
+                            trailingIcon = {
+                                if (searchQuery.isNotEmpty()) {
+                                    IconButton(onClick = { searchQuery = "" }) {
+                                        Icon(Icons.Outlined.Close, contentDescription = "清空搜索")
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(16.dp),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            CaseLibraryFilter.entries.forEach { option ->
+                                FilterChip(
+                                    selected = libraryFilter == option,
+                                    onClick = { libraryFilter = option },
+                                    label = { Text(option.label) },
+                                    shape = CircleShape,
+                                )
+                            }
                         }
                         DepartmentFilterRow(
                             selectedDepartment = selectedDepartment,
@@ -193,30 +246,64 @@ fun CaseLibraryScreen(
                         )
                     }
                 }
-                if (cases.isEmpty()) {
+                if (visibleCases.isEmpty()) {
                     item {
+                        val hasFilter = normalizedQuery.isNotEmpty() || libraryFilter != CaseLibraryFilter.ALL
                         EmptyState(
                             icon = Icons.Outlined.SearchOff,
-                            title = "该科室暂无病例",
-                            description = "切换其他科室，或使用 AI 生成一个新病例。",
-                            actionLabel = "AI 生成病例",
-                            onAction = { showGenerateDialog = true },
+                            title = if (hasFilter) "没有匹配的病例" else "该科室暂无病例",
+                            description = if (hasFilter) {
+                                "试试调整搜索关键词，或重置筛选条件。"
+                            } else {
+                                "切换其他科室，或使用 AI 生成一个新病例。"
+                            },
+                            actionLabel = if (hasFilter) "重置筛选" else "AI 生成病例",
+                            onAction = {
+                                if (hasFilter) {
+                                    searchQuery = ""
+                                    libraryFilter = CaseLibraryFilter.ALL
+                                } else {
+                                    showGenerateDialog = true
+                                }
+                            },
                         )
                     }
                 } else {
-                    items(cases, key = { it.id }) { medicalCase ->
+                    items(visibleCases, key = { it.id }) { medicalCase ->
                         CaseCard(
                             medicalCase = medicalCase,
                             onClick = { personalityCaseId = medicalCase.id },
                             isSaved = medicalCase.id in savedCaseIds,
                             isFavorite = medicalCase.id in favoriteCaseIds,
                             onToggleFavorite = { onToggleFavorite(medicalCase.id) },
-                            onDelete = { onDeleteSavedCase(medicalCase.id) },
+                            onDelete = { pendingDeleteCaseId = medicalCase.id },
                         )
                     }
                 }
             }
         }
+    }
+
+    val pendingDeleteCase = cases.firstOrNull { it.id == pendingDeleteCaseId }
+    if (pendingDeleteCase != null) {
+        AlertDialog(
+            onDismissRequest = { pendingDeleteCaseId = null },
+            title = { Text("删除这个 AI 病例？") },
+            text = { Text("将从病例库移除「${pendingDeleteCase.title}」，历史问诊记录不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    onDeleteSavedCase(pendingDeleteCase.id)
+                    pendingDeleteCaseId = null
+                }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteCaseId = null }) {
+                    Text("取消")
+                }
+            },
+        )
     }
 
     val personalityCase = cases.firstOrNull { it.id == personalityCaseId }
@@ -284,11 +371,6 @@ private fun PracticeHero(builtInCount: Int) {
                 style = MaterialTheme.typography.headlineMedium,
                 fontWeight = FontWeight.Bold,
             )
-            Text(
-                text = "问诊结束后生成规范大病历与结构化评分，回看自己的问诊路径。",
-                color = Color.White.copy(alpha = 0.86f),
-                style = MaterialTheme.typography.bodyMedium,
-            )
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
                 HeroStat(value = "$builtInCount", label = "标准病例")
                 HeroStat(value = "${Departments.all.size - 1}", label = "临床科室")
@@ -338,7 +420,7 @@ private fun AiCaseCard(
             Box(
                 modifier = Modifier
                     .size(46.dp)
-                    .background(Color.White, RoundedCornerShape(15.dp)),
+                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(15.dp)),
                 contentAlignment = Alignment.Center,
             ) {
                 if (isGenerating) {
@@ -498,31 +580,22 @@ private fun CaseCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            if (isSaved) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.End,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    TextButton(onClick = onToggleFavorite) {
-                        Text(if (isFavorite) "取消收藏" else "收藏")
-                    }
-                    TextButton(onClick = onDelete) {
-                        Text("删除")
-                    }
-                }
-            }
             Spacer(modifier = Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = if (isSaved) Arrangement.SpaceBetween else Arrangement.End,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = "预计 10–15 分钟",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.weight(1f),
-                )
+                if (isSaved) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = onToggleFavorite) {
+                            Text(if (isFavorite) "取消收藏" else "收藏")
+                        }
+                        TextButton(onClick = onDelete) {
+                            Text("删除")
+                        }
+                    }
+                }
                 Button(
                     onClick = onClick,
                     shape = CircleShape,
@@ -578,12 +651,6 @@ private fun GenerateCaseDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Text(
-                    text = "选择科室与难度，DeepSeek 会生成一份带隐藏资料的标准化病人病例。",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("科室分组", style = MaterialTheme.typography.titleSmall)
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
@@ -644,16 +711,16 @@ private fun GenerateCaseDialog(
                         }
                     }
                     // 症候提示摘要：只取第一段，避免把红旗里的诊断名直接展示给正在练问诊的用户。
-                    Text(
-                        text = when (department) {
-                            CaseGenerationSelection.RANDOM_DEPARTMENT -> "症候参考：将从全部科室中随机"
-                            CaseGenerationSelection.RANDOM -> "症候参考：将从${currentGroup.label}中随机"
-                            else -> "症候参考：" +
-                                CaseGenerationDepartments.hintFor(department).substringBefore("；")
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    if (department != CaseGenerationSelection.RANDOM_DEPARTMENT &&
+                        department != CaseGenerationSelection.RANDOM
+                    ) {
+                        Text(
+                            text = "常见主诉：" +
+                                CaseGenerationDepartments.hintFor(department).substringBefore("；"),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                 }
 
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -838,10 +905,12 @@ private fun PersonalitySelector(
                 }
             }
         }
-        Text(
-            text = selected?.description ?: "将从全部性格中随机选择",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        if (selected != null) {
+            Text(
+                text = selected.description,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

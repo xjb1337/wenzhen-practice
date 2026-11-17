@@ -1,8 +1,10 @@
 package com.xjb.wenzhen.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
@@ -79,6 +81,7 @@ import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import com.xjb.wenzhen.domain.CoverageAnalyzer
 import com.xjb.wenzhen.domain.CoverageReport
+import com.xjb.wenzhen.domain.HistoryTopic
 import com.xjb.wenzhen.domain.TopicCoverage
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.EmptyState
@@ -152,6 +155,43 @@ fun ChatScreen(
     val messageCount = messages.size + if (showTyping || isQueryingClinical) 1 else 0
     var coverageExpanded by rememberSaveable { mutableStateOf(coverageInitiallyExpanded) }
     var clinicalType by remember { mutableStateOf<ClinicalRequestType?>(null) }
+    var input by rememberSaveable { mutableStateOf("") }
+    var showBusyBackDialog by remember { mutableStateOf(false) }
+    val handleBack: () -> Unit = {
+        if (isPatientTyping || isQueryingClinical) {
+            showBusyBackDialog = true
+        } else {
+            onBack()
+        }
+    }
+    BackHandler(enabled = isPatientTyping || isQueryingClinical) {
+        showBusyBackDialog = true
+    }
+    if (showBusyBackDialog) {
+        AlertDialog(
+            onDismissRequest = { showBusyBackDialog = false },
+            title = { Text("当前正在等待回复") },
+            text = { Text("提问或检查请求还在进行中，已为你自动保存草稿。确定先返回病例库吗？") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showBusyBackDialog = false
+                    onBack()
+                }) {
+                    Text("返回病例库")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showBusyBackDialog = false }) {
+                    Text("继续等待")
+                }
+            },
+        )
+    }
+    val completedClinicalItems = remember(messages) {
+        messages.filter { it.role == MessageRole.SYSTEM }
+            .mapNotNull { it.systemTitle?.substringAfter(" · ")?.trim() }
+            .toSet()
+    }
     // 流式 token 只改 SENDING 气泡的内容，不影响问诊覆盖；把它排除后，
     // 覆盖率不会在每个 token 到达时重新分析。
     val coverageMessages = remember(messages) {
@@ -191,7 +231,7 @@ fun ChatScreen(
             WenzhenTopBar(
                 title = medicalCase.title,
                 subtitle = "${medicalCase.department} · ${medicalCase.patient.name} · ${medicalCase.patient.age}",
-                onBack = onBack,
+                onBack = handleBack,
                 actions = {
                     TextButton(
                         onClick = onFinish,
@@ -229,6 +269,8 @@ fun ChatScreen(
                     )
                 }
                 ChatComposer(
+                    input = input,
+                    onInputChange = { input = it },
                     enabled = hasApiKey && !isPatientTyping && !isQueryingClinical,
                     isBusy = isPatientTyping || isQueryingClinical,
                     onSend = onSendMessage,
@@ -256,29 +298,13 @@ fun ChatScreen(
                     modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
                 )
             }
-            if (lastReplyMillis != null || contextWarning) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 2.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    lastReplyMillis?.let { millis ->
-                        Text(
-                            text = "上次回复 ${"%.1f".format(millis / 1000.0)}s" +
-                                (lastReplyTokens?.let { " · 约 $it tokens" } ?: ""),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    if (contextWarning) {
-                        Text(
-                            text = "对话较长，继续练习会增加耗时和费用，建议适时结束。",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.error,
-                        )
-                    }
-                }
+            if (contextWarning) {
+                Text(
+                    text = "对话较长，继续练习会增加耗时和费用，建议适时结束。",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 2.dp),
+                )
             }
             Box(modifier = Modifier.fillMaxWidth().weight(1f)) {
                 LazyColumn(
@@ -295,6 +321,11 @@ fun ChatScreen(
                             startedAtMillis = startedAtMillis,
                             expanded = coverageExpanded,
                             onToggle = { coverageExpanded = !coverageExpanded },
+                            lastReplyMillis = lastReplyMillis,
+                            lastReplyTokens = lastReplyTokens,
+                            onUseSuggestion = { suggestion ->
+                                input = suggestion
+                            },
                             modifier = Modifier.padding(bottom = 2.dp),
                         )
                     }
@@ -305,8 +336,7 @@ fun ChatScreen(
                         item {
                             EmptyState(
                                 icon = Icons.Outlined.ChatBubbleOutline,
-                                title = "开始你的问诊",
-                                description = "从主诉、起病时间和伴随症状开始，逐步了解患者。",
+                                title = "开始问诊",
                             )
                         }
                     }
@@ -359,6 +389,7 @@ fun ChatScreen(
     clinicalType?.let { type ->
         ClinicalRequestDialog(
             requestType = type,
+            completedItems = completedClinicalItems,
             onDismiss = { clinicalType = null },
             onConfirm = { item ->
                 clinicalType = null
@@ -375,7 +406,11 @@ private fun CoverageHintBar(
     expanded: Boolean,
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
+    lastReplyMillis: Long? = null,
+    lastReplyTokens: Int? = null,
+    onUseSuggestion: (String) -> Unit = {},
 ) {
+    var selectedTopic by remember { mutableStateOf<HistoryTopic?>(null) }
     Surface(
         modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -409,10 +444,23 @@ private fun CoverageHintBar(
                 }
                 Spacer(modifier = Modifier.size(9.dp))
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "问诊提示 · 已覆盖 ${report.coveredCount}/${report.topics.size}",
-                        style = MaterialTheme.typography.labelLarge,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = "问诊提示 · 已覆盖 ${report.coveredCount}/${report.topics.size}",
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        lastReplyMillis?.let { millis ->
+                            Text(
+                                text = "${"%.1f".format(java.util.Locale.ROOT, millis / 1000.0)}s" +
+                                    (lastReplyTokens?.let { " · ~${it}t" } ?: ""),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
                     if (!expanded) {
                         Text(
                             text = if (report.missing.isEmpty()) {
@@ -435,12 +483,53 @@ private fun CoverageHintBar(
                 }
             }
             AnimatedVisibility(visible = expanded) {
-                LazyRow(
+                Column(
                     modifier = Modifier.padding(top = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(report.topics) { topic ->
-                        TopicChip(topic)
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                        items(report.topics) { topic ->
+                            TopicChip(
+                                topic = topic,
+                                selected = selectedTopic == topic.topic,
+                                onClick = {
+                                    selectedTopic = if (selectedTopic == topic.topic) null else topic.topic
+                                },
+                            )
+                        }
+                    }
+                    val activeTopic = selectedTopic ?: report.missing.firstOrNull()
+                    if (activeTopic != null) {
+                        val suggestion = topicPromptSuggestion(activeTopic)
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = TealContainer.copy(alpha = 0.45f),
+                        ) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = "${activeTopic.label}推荐问法",
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = TealPrimary,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = suggestion,
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurface,
+                                    )
+                                }
+                                TextButton(onClick = { onUseSuggestion(suggestion) }) {
+                                    Text("填入提问")
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -449,10 +538,19 @@ private fun CoverageHintBar(
 }
 
 @Composable
-private fun TopicChip(topic: TopicCoverage) {
+private fun TopicChip(
+    topic: TopicCoverage,
+    selected: Boolean,
+    onClick: () -> Unit,
+) {
     val background = if (topic.covered) TealContainer else MaterialTheme.colorScheme.errorContainer
     val foreground = if (topic.covered) TealPrimary else MaterialTheme.colorScheme.onErrorContainer
-    Surface(shape = CircleShape, color = background) {
+    Surface(
+        shape = CircleShape,
+        color = background,
+        border = if (selected) BorderStroke(1.5.dp, TealPrimary) else null,
+        modifier = Modifier.clickable(onClick = onClick),
+    ) {
         Text(
             text = "${if (topic.covered) "✓" else "○"} ${topic.topic.label}",
             modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
@@ -460,6 +558,17 @@ private fun TopicChip(topic: TopicCoverage) {
             style = MaterialTheme.typography.labelMedium,
         )
     }
+}
+
+private fun topicPromptSuggestion(topic: HistoryTopic): String = when (topic) {
+    HistoryTopic.CHIEF_COMPLAINT -> "请问您这次主要是哪里不舒服，持续多久了？"
+    HistoryTopic.PRESENT_ILLNESS -> "症状是什么诱因引起的？有没有加重、缓解因素或伴随症状？"
+    HistoryTopic.PAST_HISTORY -> "您以前有没有高血压、糖尿病、手术史或药物过敏史？平时在吃什么药？"
+    HistoryTopic.PERSONAL_HISTORY -> "您平时抽烟喝酒吗？从事什么职业，作息和饮食怎么样？"
+    HistoryTopic.MARITAL_HISTORY -> "请问您结婚了吗？配偶和子女健康情况如何？"
+    HistoryTopic.MENSTRUAL_HISTORY -> "请问您平时月经规律吗？末次月经是什么时候？"
+    HistoryTopic.FAMILY_HISTORY -> "家里父母或直系亲属有没有类似的疾病或遗传病史？"
+    HistoryTopic.REVIEW_OF_SYSTEMS -> "最近睡眠、胃口、体重和大小便怎么样？有没有发热、咳嗽或心慌？"
 }
 
 @Composable
@@ -492,25 +601,17 @@ private fun PatientSummaryCard(medicalCase: MedicalCase) {
                 )
             }
             Column(modifier = Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = medicalCase.patient.name,
-                        style = MaterialTheme.typography.titleMedium,
-                    )
-                    Spacer(modifier = Modifier.size(7.dp))
-                    Text(
-                        text = medicalCase.patientSummary.removePrefix(medicalCase.patient.name + " · "),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                Spacer(modifier = Modifier.height(5.dp))
                 Text(
-                    text = "主诉通常需要从症状、时间和伴随表现逐步追问",
+                    text = medicalCase.patient.name,
+                    style = MaterialTheme.typography.titleMedium,
+                )
+                Spacer(modifier = Modifier.height(3.dp))
+                Text(
+                    text = medicalCase.patientSummary.removePrefix(medicalCase.patient.name + " · "),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             DepartmentMark(department = medicalCase.department, size = 38)
@@ -598,7 +699,7 @@ private fun SystemResultCard(message: ChatMessage) {
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Surface(color = Color.White.copy(alpha = 0.72f), shape = CircleShape) {
+                Surface(color = MaterialTheme.colorScheme.surface.copy(alpha = 0.85f), shape = CircleShape) {
                     Icon(
                         imageVector = Icons.Outlined.Science,
                         contentDescription = null,
@@ -655,19 +756,20 @@ private fun TypingBubble(label: String) {
 
 @Composable
 private fun ChatComposer(
+    input: String,
+    onInputChange: (String) -> Unit,
     enabled: Boolean,
     isBusy: Boolean,
     onSend: (String) -> Unit,
     onRequestExam: () -> Unit,
     onRequestLab: () -> Unit,
 ) {
-    var input by rememberSaveable { mutableStateOf("") }
     val focusManager = LocalFocusManager.current
     val send = {
         val text = input.trim()
         if (text.isNotEmpty() && enabled) {
             onSend(text)
-            input = ""
+            onInputChange("")
             focusManager.clearFocus()
         }
     }
@@ -709,7 +811,7 @@ private fun ChatComposer(
             ) {
                 OutlinedTextField(
                     value = input,
-                    onValueChange = { input = it },
+                    onValueChange = onInputChange,
                     modifier = Modifier
                         .weight(1f)
                         .widthIn(min = 0.dp)
@@ -738,6 +840,7 @@ private fun ChatComposer(
 @Composable
 private fun ClinicalRequestDialog(
     requestType: ClinicalRequestType,
+    completedItems: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
 ) {
@@ -747,17 +850,13 @@ private fun ClinicalRequestDialog(
         title = { Text(requestType.actionLabel) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                Text(
-                    text = "选择推荐项目或自行输入。结果会以系统卡片插入对话，并用于后续病历书写。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
                     items(requestType.suggestions) { suggestion ->
+                        val done = suggestion in completedItems
                         FilterChip(
                             selected = item == suggestion,
                             onClick = { item = suggestion },
-                            label = { Text(suggestion) },
+                            label = { Text(if (done) "✓ $suggestion" else suggestion) },
                             shape = CircleShape,
                         )
                     }

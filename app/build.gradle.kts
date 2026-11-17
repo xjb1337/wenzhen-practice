@@ -4,8 +4,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 15
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.3.9"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 16
+val appVersionName = (project.findProperty("versionName") as String?) ?: "1.4.0"
 val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 
 android {
@@ -116,8 +116,6 @@ dependencies {
     testImplementation("androidx.test:core-ktx:1.6.1")
     testImplementation("androidx.test.ext:junit:1.2.1")
     testImplementation("org.robolectric:robolectric:4.13")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi:1.38.0")
-    testImplementation("io.github.takahirom.roborazzi:roborazzi-compose:1.38.0")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("androidx.room:room-testing:2.6.1")
     testImplementation("androidx.test:runner:1.6.2")

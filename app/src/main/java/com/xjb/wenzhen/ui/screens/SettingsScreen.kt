@@ -1,7 +1,7 @@
 package com.xjb.wenzhen.ui.screens
 
+import androidx.activity.compose.BackHandler
 import com.xjb.wenzhen.ui.components.bringIntoViewOnFocus
-import com.xjb.wenzhen.data.settings.BaseUrlPolicy
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.consumeWindowInsets
 import android.content.Intent
@@ -41,6 +41,7 @@ import androidx.compose.material.icons.outlined.OpenInNew
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -56,7 +57,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
@@ -75,12 +75,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.data.settings.AppSettings
-import com.xjb.wenzhen.data.settings.ApiSource
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.update.InstallLaunchResult
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import com.xjb.wenzhen.data.update.UpdateInstaller
 import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.ui.ConnectionTestUiState
@@ -88,7 +84,6 @@ import com.xjb.wenzhen.ui.UpdateUiState
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.AppTheme
-import com.xjb.wenzhen.ui.theme.BlueSoft
 import com.xjb.wenzhen.ui.theme.TealContainer
 import com.xjb.wenzhen.ui.theme.GradientStart
 import com.xjb.wenzhen.ui.theme.GradientEnd
@@ -106,7 +101,6 @@ fun SettingsScreen(
         baseUrl: String,
         thinkingLevel: ThinkingLevel,
         generateRecord: Boolean,
-        apiSource: ApiSource,
     ) -> Unit,
     onBack: () -> Unit,
     offlineMode: Boolean = settings.offlineMode,
@@ -115,18 +109,12 @@ fun SettingsScreen(
     saveError: String? = null,
     onDismissError: () -> Unit = {},
     onTestConnection: (
-        apiSource: ApiSource,
         apiKey: String,
         model: String,
         baseUrl: String,
         thinkingLevel: ThinkingLevel,
-    ) -> Unit = { _, _, _, _, _ -> },
+    ) -> Unit = { _, _, _, _ -> },
     connectionTest: ConnectionTestUiState = ConnectionTestUiState(),
-    isRedeemingInvite: Boolean = false,
-    redeemError: String? = null,
-    onRedeemInvite: (String) -> Unit = {},
-    onClearRedeem: () -> Unit = {},
-    onDismissRedeemError: () -> Unit = {},
     onCheckUpdate: () -> Unit = {},
     updateState: UpdateUiState = UpdateUiState.Idle,
     onDownloadUpdate: () -> Unit = {},
@@ -139,31 +127,78 @@ fun SettingsScreen(
 ) {
     val context = LocalContext.current
     val knownModels = listOf(AppSettings.MODEL_FLASH, AppSettings.MODEL_PRO)
-    val initialModelIndex = knownModels.indexOf(settings.model).takeIf { it >= 0 } ?: 2
+    val initialModelIndex = knownModels.indexOf(settings.model).takeIf { it >= 0 } ?: 0
     // 明文 Key 不写进 savedInstanceState（上轮审查 F-03）。
     var apiKey by remember { mutableStateOf(settings.apiKey) }
     var showKey by rememberSaveable { mutableStateOf(false) }
     var selectedModelIndex by rememberSaveable { mutableIntStateOf(initialModelIndex) }
-    var customModel by rememberSaveable {
-        mutableStateOf(if (initialModelIndex == 2) settings.model else "")
-    }
-    var baseUrl by rememberSaveable { mutableStateOf(settings.baseUrl) }
     var localError by rememberSaveable { mutableStateOf<String?>(null) }
     var guideExpanded by rememberSaveable { mutableStateOf(initialGuideExpanded) }
     var thinkingLevel by rememberSaveable { mutableStateOf(settings.thinkingLevel) }
     var generateRecord by rememberSaveable { mutableStateOf(settings.generateRecord) }
     var localOfflineMode by rememberSaveable { mutableStateOf(offlineMode) }
-    var apiSource by rememberSaveable { mutableStateOf(settings.apiSource) }
-    var inviteCode by rememberSaveable { mutableStateOf("") }
+    var showUnsavedDialog by remember { mutableStateOf(false) }
 
-    LaunchedEffect(settings.sessionToken) {
-        if (settings.sessionToken.isNotBlank()) inviteCode = ""
+    fun selectedModel(): String = knownModels.getOrElse(selectedModelIndex) { AppSettings.MODEL_FLASH }
+
+    val normalizedSavedModel = if (settings.model in knownModels) settings.model else AppSettings.MODEL_FLASH
+    val draftModel = selectedModel()
+    val hasUnsavedChanges = apiKey.trim() != settings.apiKey.trim() ||
+        generateRecord != settings.generateRecord ||
+        thinkingLevel != settings.thinkingLevel ||
+        draftModel != normalizedSavedModel
+
+    fun trySaveSettings(): Boolean {
+        localError = null
+        onSave(
+            apiKey,
+            selectedModel(),
+            AppSettings.DEFAULT_BASE_URL,
+            thinkingLevel,
+            generateRecord,
+        )
+        return true
     }
 
-    fun selectedModel(): String = when (selectedModelIndex) {
-        0 -> AppSettings.MODEL_FLASH
-        1 -> AppSettings.MODEL_PRO
-        else -> customModel.trim()
+    val handleBack: () -> Unit = {
+        if (hasUnsavedChanges) {
+            showUnsavedDialog = true
+        } else {
+            onBack()
+        }
+    }
+
+    BackHandler(enabled = hasUnsavedChanges) {
+        showUnsavedDialog = true
+    }
+
+    if (showUnsavedDialog) {
+        AlertDialog(
+            onDismissRequest = { showUnsavedDialog = false },
+            title = { Text("有未保存的设置") },
+            text = { Text("你修改了 AI 服务或生成选项但尚未保存，是否先保存再离开？") },
+            confirmButton = {
+                Button(onClick = {
+                    showUnsavedDialog = false
+                    if (trySaveSettings()) onBack()
+                }) {
+                    Text("保存并离开")
+                }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { showUnsavedDialog = false }) {
+                        Text("继续编辑")
+                    }
+                    TextButton(onClick = {
+                        showUnsavedDialog = false
+                        onBack()
+                    }) {
+                        Text("放弃更改", color = MaterialTheme.colorScheme.error)
+                    }
+                }
+            },
+        )
     }
 
     Scaffold(
@@ -171,8 +206,15 @@ fun SettingsScreen(
         topBar = {
             WenzhenTopBar(
                 title = "设置",
-                subtitle = "配置 AI 服务，管理练习与更新",
-                onBack = onBack,
+                subtitle = if (hasUnsavedChanges) "有未保存的更改" else null,
+                onBack = handleBack,
+                actions = {
+                    if (hasUnsavedChanges) {
+                        TextButton(onClick = { trySaveSettings() }) {
+                            Text("保存", fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                },
             )
         },
         containerColor = MaterialTheme.colorScheme.background,
@@ -212,21 +254,13 @@ fun SettingsScreen(
                                 modifier = Modifier.size(20.dp),
                             )
                             Text(
-                                text = if (apiSource == ApiSource.BUILTIN) {
-                                    "内置服务，无需填写 Key"
-                                } else {
-                                    "密钥只留在本机"
-                                },
+                                text = "密钥仅保存在本机",
                                 style = MaterialTheme.typography.titleMedium,
                                 color = Color.White,
                             )
                         }
                         Text(
-                            text = if (apiSource == ApiSource.BUILTIN) {
-                                "邀请码仅在本机兑换，后续请求经内置中转发送；应用不包含 DeepSeek 密钥。"
-                            } else {
-                                "API Key 使用系统加密存储保存，不会写入日志。问诊内容会发送到你配置的 DeepSeek 服务。"
-                            },
+                            text = "API Key 使用系统加密存储",
                             style = MaterialTheme.typography.bodySmall,
                             color = Color.White.copy(alpha = 0.82f),
                         )
@@ -237,11 +271,6 @@ fun SettingsScreen(
             if (saveError != null) {
                 item { NoticeBanner(message = saveError, onDismiss = onDismissError) }
             }
-            if (redeemError != null) {
-                item {
-                    NoticeBanner(message = redeemError, onDismiss = onDismissRedeemError)
-                }
-            }
             if (localError != null) {
                 item {
                     NoticeBanner(message = localError.orEmpty(), onDismiss = { localError = null })
@@ -250,186 +279,71 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(title = "AI 服务") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        ApiSource.entries.forEach { source ->
-                            FilterChip(
-                                selected = apiSource == source,
-                                onClick = {
-                                    apiSource = source
-                                    localError = null
-                                },
-                                label = { Text(source.label) },
-                            )
-                        }
+                    val activeSummary = when {
+                        localOfflineMode -> "当前生效：离线基础训练（不调用 AI 服务）"
+                        settings.apiKey.isNotBlank() -> "当前生效：${settings.model}"
+                        else -> "当前生效：待填写 API Key"
                     }
+                    Text(
+                        text = activeSummary,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = TealPrimary,
+                    )
 
-                    if (apiSource == ApiSource.OWN_KEY) {
-                        OutlinedTextField(
-                            value = apiKey,
-                            onValueChange = { apiKey = it },
-                            modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
-                            label = { Text("API Key") },
-                            placeholder = { Text("sk-…") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                            visualTransformation = if (showKey) {
-                                VisualTransformation.None
-                            } else {
-                                PasswordVisualTransformation()
-                            },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-                            trailingIcon = {
-                                IconButton(onClick = { showKey = !showKey }) {
-                                    Icon(
-                                        imageVector = if (showKey) {
-                                            Icons.Outlined.VisibilityOff
-                                        } else {
-                                            Icons.Outlined.Visibility
-                                        },
-                                        contentDescription = if (showKey) "隐藏 API Key" else "显示 API Key",
-                                    )
-                                }
-                            },
-                            supportingText = {
-                                Text(
-                                    if (apiKey.isBlank()) {
-                                        "未设置时无法使用 AI 对话、病例生成和评分功能"
-                                    } else {
-                                        "密钥已遮罩显示，点击右侧图标可临时查看"
-                                    }
-                                )
-                            },
-                        )
-                        KeyGuideCard(
-                            expanded = guideExpanded,
-                            onToggle = { guideExpanded = !guideExpanded },
-                            onOpenWebsite = {
-                                runCatching {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse(DEEPSEEK_PLATFORM_URL))
-                                    )
-                                }.onFailure {
-                                    Toast.makeText(context, "未找到可用的浏览器", Toast.LENGTH_SHORT).show()
-                                }
-                            },
-                        )
-                    } else {
-                        Text(
-                            text = "输入一次性邀请码兑换内置服务。兑换后仅在本机保存匿名设备标识和会话令牌。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        if (settings.inviteRedeemed) {
-                            Surface(
-                                modifier = Modifier.fillMaxWidth(),
-                                shape = RoundedCornerShape(16.dp),
-                                color = TealContainer.copy(alpha = 0.45f),
-                                border = BorderStroke(1.dp, TealPrimary.copy(alpha = 0.16f)),
-                            ) {
-                                Column(
-                                    modifier = Modifier.padding(horizontal = 13.dp, vertical = 10.dp),
-                                    verticalArrangement = Arrangement.spacedBy(4.dp),
-                                ) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(7.dp),
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Outlined.CheckCircle,
-                                            contentDescription = null,
-                                            tint = TealPrimary,
-                                            modifier = Modifier.size(18.dp),
-                                        )
-                                        Text("已兑换，可直接使用内置服务", style = MaterialTheme.typography.titleSmall)
-                                    }
-                                    settings.sessionExpiresAt?.let { expiresAt ->
-                                        Text(
-                                            text = "有效期至 ${formatSessionExpiry(expiresAt)}",
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        )
-                                    }
-                                    TextButton(
-                                        onClick = onClearRedeem,
-                                        contentPadding = PaddingValues(horizontal = 2.dp),
-                                    ) {
-                                        Text("清除兑换")
-                                    }
-                                }
-                            }
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
+                        label = { Text("API Key") },
+                        placeholder = { Text("sk-…") },
+                        singleLine = true,
+                        shape = RoundedCornerShape(16.dp),
+                        visualTransformation = if (showKey) {
+                            VisualTransformation.None
                         } else {
-                            if (settings.sessionToken.isNotBlank() && settings.isSessionExpired()) {
-                                Text(
-                                    text = "会话已过期，请重新兑换",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.error,
+                            PasswordVisualTransformation()
+                        },
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            IconButton(onClick = { showKey = !showKey }) {
+                                Icon(
+                                    imageVector = if (showKey) {
+                                        Icons.Outlined.VisibilityOff
+                                    } else {
+                                        Icons.Outlined.Visibility
+                                    },
+                                    contentDescription = if (showKey) "隐藏 API Key" else "显示 API Key",
                                 )
                             }
-                            OutlinedTextField(
-                                value = inviteCode,
-                                onValueChange = { inviteCode = it },
-                                modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
-                                label = { Text("邀请码") },
-                                placeholder = { Text("WZ-…") },
-                                singleLine = true,
-                                shape = RoundedCornerShape(16.dp),
-                            )
-                            Button(
-                                onClick = {
-                                    if (inviteCode.isBlank()) {
-                                        localError = "请输入邀请码。"
-                                    } else {
-                                        localError = null
-                                        onRedeemInvite(inviteCode)
-                                    }
-                                },
-                                modifier = Modifier.fillMaxWidth(),
-                                enabled = !isRedeemingInvite,
-                                shape = RoundedCornerShape(14.dp),
-                                contentPadding = PaddingValues(vertical = 12.dp),
-                            ) {
-                                if (isRedeemingInvite) {
-                                    CircularProgressIndicator(
-                                        modifier = Modifier.size(17.dp),
-                                        strokeWidth = 2.dp,
-                                    )
-                                    Spacer(modifier = Modifier.size(8.dp))
-                                    Text("正在兑换…")
-                                } else {
-                                    Text("兑换")
-                                }
+                        },
+                    )
+                    KeyGuideCard(
+                        expanded = guideExpanded,
+                        onToggle = { guideExpanded = !guideExpanded },
+                        onOpenWebsite = {
+                            runCatching {
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(DEEPSEEK_PLATFORM_URL))
+                                )
+                            }.onFailure {
+                                Toast.makeText(context, "未找到可用的浏览器", Toast.LENGTH_SHORT).show()
                             }
-                        }
-                        Text(
-                            text = "内置服务仅支持 Flash；请求会通过内置中转发送。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
+                        },
+                    )
 
                     ConnectionTestStatus(state = connectionTest)
                     OutlinedButton(
                         onClick = {
-                            val model = if (apiSource == ApiSource.BUILTIN) {
-                                AppSettings.MODEL_FLASH
+                            if (apiKey.isBlank()) {
+                                localError = "请先填写 DeepSeek API Key。"
                             } else {
-                                selectedModel()
-                            }
-                            localError = when {
-                                apiSource == ApiSource.BUILTIN && !settings.inviteRedeemed ->
-                                    "请先兑换邀请码。"
-                                apiSource == ApiSource.OWN_KEY && apiKey.isBlank() ->
-                                    "请先填写 DeepSeek API Key。"
-                                apiSource == ApiSource.OWN_KEY &&
-                                    selectedModelIndex == 2 && model.isBlank() ->
-                                    "请填写自定义模型名称。"
-                                apiSource == ApiSource.OWN_KEY &&
-                                    BaseUrlPolicy.normalizeHttps(baseUrl) == null ->
-                                    "Base URL 必须使用 HTTPS（以 https:// 开头）。"
-                                else -> null
-                            }
-                            if (localError == null) {
-                                onTestConnection(apiSource, apiKey, model, baseUrl, thinkingLevel)
+                                localError = null
+                                onTestConnection(
+                                    apiKey,
+                                    selectedModel(),
+                                    AppSettings.DEFAULT_BASE_URL,
+                                    thinkingLevel,
+                                )
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
@@ -448,21 +362,11 @@ fun SettingsScreen(
                             Text("测试连接")
                         }
                     }
-                    Text(
-                        text = if (apiSource == ApiSource.BUILTIN) {
-                            "优先检查内置服务健康状态；接口缺失时会改用一次最小请求，不产生问诊内容。"
-                        } else {
-                            "发送一条 max_tokens=1 的最小请求，只验证 Key、余额、限流和网络状态，不产生问诊内容。"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                 }
             }
 
-            if (apiSource == ApiSource.OWN_KEY) {
-                item {
-                    SettingsSection(title = "模型") {
+            item {
+                SettingsSection(title = "模型") {
                     ModelOption(
                         title = "DeepSeek V4 Flash",
                         description = "响应更快，适合日常问诊练习",
@@ -475,58 +379,25 @@ fun SettingsScreen(
                         selected = selectedModelIndex == 1,
                         onClick = { selectedModelIndex = 1 },
                     )
-                    ModelOption(
-                        title = "自定义模型",
-                        description = "填写服务端支持的模型名称",
-                        selected = selectedModelIndex == 2,
-                        onClick = { selectedModelIndex = 2 },
-                    )
-                    if (selectedModelIndex == 2) {
-                        OutlinedTextField(
-                            value = customModel,
-                            onValueChange = { customModel = it },
-                            modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
-                            label = { Text("模型名称") },
-                            placeholder = { Text("例如 deepseek-chat") },
-                            singleLine = true,
-                            shape = RoundedCornerShape(16.dp),
-                        )
-                    }
-                    }
                 }
+            }
 
-                item {
-                    SettingsSection(title = "接口地址") {
-                    OutlinedTextField(
-                        value = baseUrl,
-                        onValueChange = { baseUrl = it },
-                        modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
-                        label = { Text("Base URL") },
-                        placeholder = { Text(AppSettings.DEFAULT_BASE_URL) },
-                        singleLine = true,
-                        shape = RoundedCornerShape(16.dp),
-                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                        supportingText = {
-                            Text("将调用 /chat/completions，默认地址为 ${AppSettings.DEFAULT_BASE_URL}")
-                        },
-                    )
-                    TextButton(
-                        onClick = { baseUrl = AppSettings.DEFAULT_BASE_URL },
-                        contentPadding = PaddingValues(horizontal = 4.dp),
-                    ) {
-                        Text("恢复默认地址")
-                    }
+            item {
+                SettingsSection(title = "思考强度") {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThinkingLevel.entries.forEach { level ->
+                            FilterChip(
+                                selected = thinkingLevel == level,
+                                onClick = { thinkingLevel = level },
+                                label = { Text(level.label) },
+                            )
+                        }
                     }
                 }
             }
 
             item {
                 SettingsSection(title = "外观主题") {
-                    Text(
-                        text = "深浅配色跟随系统自动切换；选择后立即生效并保存在本机。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
                     LazyRow(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         contentPadding = PaddingValues(vertical = 2.dp),
@@ -543,24 +414,7 @@ fun SettingsScreen(
             }
 
             item {
-                SettingsSection(title = "思考强度") {
-                    if (apiSource == ApiSource.BUILTIN) {
-                        Text(
-                            text = "内置服务不支持思考模式",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    } else {
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            ThinkingLevel.entries.forEach { level ->
-                                androidx.compose.material3.FilterChip(
-                                    selected = thinkingLevel == level,
-                                    onClick = { thinkingLevel = level },
-                                    label = { Text(level.label) },
-                                )
-                            }
-                        }
-                    }
+                SettingsSection(title = "练习选项") {
                     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text("生成病历", style = MaterialTheme.typography.titleSmall)
@@ -586,40 +440,13 @@ fun SettingsScreen(
 
             item {
                 Button(
-                    onClick = {
-                        val model = if (apiSource == ApiSource.BUILTIN) {
-                            AppSettings.MODEL_FLASH
-                        } else {
-                            selectedModel()
-                        }
-                        when {
-                            apiSource == ApiSource.OWN_KEY &&
-                                selectedModelIndex == 2 && model.isBlank() -> {
-                                localError = "请填写自定义模型名称。"
-                            }
-                            apiSource == ApiSource.OWN_KEY &&
-                                BaseUrlPolicy.normalizeHttps(baseUrl) == null -> {
-                                localError = "Base URL 必须使用 HTTPS（以 https:// 开头）。"
-                            }
-                            else -> {
-                                localError = null
-                                onSave(
-                                    apiKey,
-                                    model,
-                                    baseUrl,
-                                    thinkingLevel,
-                                    generateRecord,
-                                    apiSource,
-                                )
-                            }
-                        }
-                    },
+                    onClick = { trySaveSettings() },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
-                    Text("保存设置", fontWeight = FontWeight.SemiBold)
+                    Text(if (hasUnsavedChanges) "保存设置（有未保存更改）" else "保存设置", fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -636,17 +463,11 @@ fun SettingsScreen(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = "问诊练习 v$currentVersionName",
-                                        style = MaterialTheme.typography.titleSmall,
-                                    )
-                                    Text(
-                                        text = "versionCode $currentVersionCode",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
+                                Text(
+                                    text = "问诊练习 v$currentVersionName ($currentVersionCode)",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    modifier = Modifier.weight(1f),
+                                )
                                 TextButton(
                                     onClick = onCheckUpdate,
                                     enabled = updateState !is UpdateUiState.Checking &&
@@ -671,47 +492,19 @@ fun SettingsScreen(
                             val updateStatusText = when (val state = updateState) {
                                 UpdateUiState.UpToDate -> "已是最新版本。"
                                 is UpdateUiState.Failed -> state.message
-                                else -> "从 GitHub Releases 获取更新，下载后校验 SHA-256 与签名证书。"
+                                else -> null
                             }
-                            Text(
-                                text = updateStatusText,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = when (updateState) {
-                                    is UpdateUiState.Failed -> MaterialTheme.colorScheme.error
-                                    else -> MaterialTheme.colorScheme.onSurfaceVariant
-                                },
-                            )
+                            if (updateStatusText != null) {
+                                Text(
+                                    text = updateStatusText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = when (updateState) {
+                                        is UpdateUiState.Failed -> MaterialTheme.colorScheme.error
+                                        else -> MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
                         }
-                    }
-                }
-            }
-
-            item {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    color = BlueSoft.copy(alpha = 0.65f),
-                ) {
-                    Row(
-                        modifier = Modifier.padding(13.dp),
-                        horizontalArrangement = Arrangement.spacedBy(9.dp),
-                        verticalAlignment = Alignment.Top,
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.Info,
-                            contentDescription = null,
-                            tint = TealPrimary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Text(
-                            text = if (apiSource == ApiSource.BUILTIN) {
-                                "内置服务不包含个人 DeepSeek Key；应用不会上传联系人、相册或设备文件。本应用仅用于医学生问诊练习，AI 生成内容可能有误，不构成医疗建议或诊断依据；身体不适请及时就医。"
-                            } else {
-                                "请使用自己有权限的 DeepSeek API 账号。应用不会上传联系人、相册或设备文件。本应用仅用于医学生问诊练习，AI 生成内容可能有误，不构成医疗建议或诊断依据；身体不适请及时就医。"
-                            },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
                     }
                 }
             }
@@ -800,7 +593,7 @@ private fun KeyGuideCard(
                         ) {
                             Surface(
                                 shape = CircleShape,
-                                color = Color.White.copy(alpha = 0.8f),
+                                color = MaterialTheme.colorScheme.surface,
                             ) {
                                 Text(
                                     text = "${index + 1}",
@@ -1023,8 +816,5 @@ private fun updateDialogUpdate(state: UpdateUiState): UpdateInfo? = when (state)
     is UpdateUiState.Failed -> state.update
     else -> null
 }
-
-private fun formatSessionExpiry(epochMillis: Long): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(epochMillis))
 
 private const val DEEPSEEK_PLATFORM_URL = "https://platform.deepseek.com"

@@ -183,23 +183,26 @@ object HistoryExporter {
             }
         }
 
-        drawLine("问诊历史记录（${records.size} 条）", title = true)
-        drawLine("导出时间：${formatTime(System.currentTimeMillis())}")
-        y += 8f
-        records.forEachIndexed { index, record ->
-            drawLine("${index + 1}. ${record.caseTitle}", title = true)
-            drawLine("科室：${record.department}　患者：${record.patientName}　得分：${record.totalScore}")
-            drawLine("时间：${formatTime(record.createdAt)}　初步诊断：${record.initialDiagnosis}")
-            if (record.recordType != "NONE" && record.medicalRecord.isNotBlank()) {
-                record.medicalRecord.lineSequence().forEach { drawLine(it) }
-            }
-            y += 10f
-        }
-        document.finishPage(page)
         val file = File(exportDir(context), "wenzhen-history-${timestamp()}.pdf")
-        file.outputStream().use { document.writeTo(it) }
-        document.close()
-        return file
+        try {
+            drawLine("问诊历史记录（${records.size} 条）", title = true)
+            drawLine("导出时间：${formatTime(System.currentTimeMillis())}")
+            y += 8f
+            records.forEachIndexed { index, record ->
+                drawLine("${index + 1}. ${record.caseTitle}", title = true)
+                drawLine("科室：${record.department}　患者：${record.patientName}　得分：${record.totalScore}")
+                drawLine("时间：${formatTime(record.createdAt)}　初步诊断：${record.initialDiagnosis}")
+                if (record.recordType != "NONE" && record.medicalRecord.isNotBlank()) {
+                    record.medicalRecord.lineSequence().forEach { drawLine(it) }
+                }
+                y += 10f
+            }
+            document.finishPage(page)
+            file.outputStream().use { document.writeTo(it) }
+            return file
+        } finally {
+            document.close()
+        }
     }
 
     private fun wrap(text: String, paint: Paint, maxWidth: Float): List<String> {
@@ -222,7 +225,7 @@ object HistoryExporter {
         File(context.cacheDir, "exports").apply { mkdirs() }
 
     private fun timestamp(): String =
-        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.getDefault()).format(Date())
+        SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
 
     private fun formatTime(value: Long): String =
         SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(value))
