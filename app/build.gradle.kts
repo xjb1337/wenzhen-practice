@@ -4,8 +4,8 @@ plugins {
     id("com.google.devtools.ksp")
 }
 
-val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 16
-val appVersionName = (project.findProperty("versionName") as String?) ?: "1.4.0"
+val appVersionCode = (project.findProperty("versionCode") as String?)?.toIntOrNull() ?: 17
+val appVersionName = (project.findProperty("versionName") as String?) ?: "1.5.0"
 val releaseStoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
 
 android {
@@ -109,7 +109,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.json:json:20240303")
+    testImplementation("org.json:json:20260719")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
     testImplementation(platform("androidx.compose:compose-bom:2024.09.03"))
     testImplementation("androidx.compose.ui:ui-test-junit4")

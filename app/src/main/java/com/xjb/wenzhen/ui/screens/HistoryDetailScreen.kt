@@ -34,6 +34,7 @@ fun HistoryDetailScreen(
             createdAt = record.createdAt,
             medicalRecord = record.medicalRecord,
             score = record.score,
+            savedTotalScore = record.savedTotalScore,
             initialDiagnosis = record.initialDiagnosis,
             diagnosisBasis = record.diagnosisBasis,
             treatmentAnswer = record.treatmentAnswer,

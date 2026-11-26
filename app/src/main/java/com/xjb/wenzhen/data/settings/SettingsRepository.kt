@@ -9,10 +9,10 @@ import com.xjb.wenzhen.ui.theme.AppTheme
 
 internal fun normalizeModel(name: String?): String {
     val normalized = name?.trim().orEmpty()
-    return when {
-        normalized.isBlank() -> AppSettings.MODEL_FLASH
-        normalized.equals("deepseek-v4-flash", ignoreCase = true) -> AppSettings.MODEL_FLASH
-        else -> normalized
+    return if (normalized.equals(AppSettings.MODEL_PRO, ignoreCase = true)) {
+        AppSettings.MODEL_PRO
+    } else {
+        AppSettings.MODEL_FLASH
     }
 }
 
@@ -22,62 +22,57 @@ class SettingsRepository(
 ) {
     private val appContext = context.applicationContext
 
-    /**
-     * 延迟初始化：避免 Application.onCreate / AppContainer 构造时在主线程加载 Keystore。
-     * security-crypto 1.1.0 仍提供 EncryptedSharedPreferences（API 已标弃用），
-     * 这里集中封装，后续替换实现不影响调用方。
-     */
+    private var openedPreferences: SharedPreferences? = null
+
+    /** 只缓存成功打开的存储，以便设备解锁后可以重试。 */
+    @Synchronized
     @Suppress("DEPRECATION")
-    private val preferences: SharedPreferences? by lazy {
-        preferencesOverride ?: runCatching {
-            val masterKey = MasterKey.Builder(appContext)
-                .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-                .build()
-            EncryptedSharedPreferences.create(
-                appContext,
-                PREFERENCES_NAME,
-                masterKey,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
-            )
-        }.getOrNull()
+    private fun preferences(): SharedPreferences {
+        preferencesOverride?.let { return it }
+        openedPreferences?.let { return it }
+        val masterKey = MasterKey.Builder(appContext)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        return EncryptedSharedPreferences.create(
+            appContext,
+            PREFERENCES_NAME,
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+        ).also { openedPreferences = it }
     }
 
     fun load(): AppSettings {
-        val prefs = preferences ?: return AppSettings()
-        return runCatching {
-            AppSettings(
-                apiKey = prefs.getString(KEY_API_KEY, "").orEmpty(),
-                model = normalizeModel(prefs.getString(KEY_MODEL, AppSettings.MODEL_FLASH)),
-                baseUrl = prefs.getString(KEY_BASE_URL, AppSettings.DEFAULT_BASE_URL)
-                    .orEmpty()
-                    .ifBlank { AppSettings.DEFAULT_BASE_URL },
-                thinkingLevel = ThinkingLevel.from(prefs.getString(KEY_THINKING_LEVEL, null)),
-                generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
-                offlineMode = prefs.getBoolean(KEY_OFFLINE_MODE, false),
-                theme = AppTheme.from(prefs.getString(KEY_THEME, null)),
-                privacyAccepted = prefs.getBoolean(KEY_PRIVACY_ACCEPTED, false),
-            )
-        }.getOrDefault(AppSettings())
+        val prefs = preferences()
+        val storedKey = prefs.getString(KEY_API_KEY, "").orEmpty().trim()
+        val storedEndpoint = prefs.getString(KEY_BASE_URL, AppSettings.DEFAULT_BASE_URL).orEmpty()
+        val legacyEndpointNeedsKey = storedKey.isNotBlank() && !BaseUrlPolicy.isOfficialEndpoint(storedEndpoint)
+        return AppSettings(
+            apiKey = storedKey.takeUnless { legacyEndpointNeedsKey }.orEmpty(),
+            model = normalizeModel(prefs.getString(KEY_MODEL, AppSettings.MODEL_FLASH)),
+            thinkingLevel = ThinkingLevel.from(prefs.getString(KEY_THINKING_LEVEL, null)),
+            generateRecord = prefs.getBoolean(KEY_GENERATE_RECORD, false),
+            offlineMode = prefs.getBoolean(KEY_OFFLINE_MODE, false),
+            theme = AppTheme.from(prefs.getString(KEY_THEME, null)),
+            privacyAccepted = prefs.getBoolean(KEY_PRIVACY_ACCEPTED, false),
+            legacyEndpointNeedsKey = legacyEndpointNeedsKey,
+        )
     }
 
     fun save(settings: AppSettings) {
-        val prefs = preferences
-            ?: throw IllegalStateException("本机加密存储初始化失败，请重启应用后重试。")
-        val saved = prefs.edit()
-            .putString(KEY_API_KEY, settings.apiKey.trim())
-            .putString(
-                KEY_MODEL,
-                normalizeModel(settings.model),
-            )
+        val prefs = preferences()
+        val editor = prefs.edit()
+        // 修改主题等普通设置时保留旧接口的凭据。用户保存新的官方 Key 后再替换。
+        if (!settings.legacyEndpointNeedsKey || settings.apiKey.isNotBlank()) {
+            editor.putString(KEY_API_KEY, settings.apiKey.trim())
+                .putString(KEY_BASE_URL, AppSettings.DEFAULT_BASE_URL)
+        }
+        val saved = editor
+            .putString(KEY_MODEL, normalizeModel(settings.model))
             .putString(KEY_THINKING_LEVEL, settings.thinkingLevel.name)
             .putBoolean(KEY_GENERATE_RECORD, settings.generateRecord)
             .putBoolean(KEY_OFFLINE_MODE, settings.offlineMode)
             .putString(KEY_THEME, settings.theme.name)
-            .putString(
-                KEY_BASE_URL,
-                settings.baseUrl.trim().ifBlank { AppSettings.DEFAULT_BASE_URL },
-            )
             .remove(KEY_API_SOURCE)
             .remove(KEY_DEVICE_ID)
             .remove(KEY_SESSION_TOKEN)

@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -18,6 +19,13 @@ interface SavedCaseDao {
     suspend fun delete(id: String)
 
     @Query("UPDATE saved_cases SET favorite = :favorite WHERE id = :id")
-    suspend fun setFavorite(id: String, favorite: Boolean)
+    suspend fun setFavorite(id: String, favorite: Boolean): Int
+
+    @Transaction
+    suspend fun setFavoriteOrSave(id: String, favorite: Boolean, builtInBookmark: SavedCaseEntity?) {
+        if (setFavorite(id, favorite) == 0 && favorite && builtInBookmark != null) {
+            upsert(builtInBookmark.copy(favorite = true))
+        }
+    }
 }
 

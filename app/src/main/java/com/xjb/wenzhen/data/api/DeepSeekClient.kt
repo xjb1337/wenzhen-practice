@@ -5,14 +5,11 @@ import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.InternalCoroutinesApi
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.job
 import kotlinx.coroutines.withContext
-import okhttp3.Call
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -27,7 +24,6 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
 
-@OptIn(InternalCoroutinesApi::class)
 class DeepSeekClient(
     private val httpClient: OkHttpClient = defaultHttpClient(),
     private val enforceHttps: Boolean = true,
@@ -339,22 +335,6 @@ class DeepSeekClient(
 
     private fun retryDelayMillis(attempt: Int, error: LlmException): Long =
         (error.retryAfterMillis ?: (800L * attempt)).coerceIn(0L, 10_000L)
-
-    /**
-     * 执行阻塞式 OkHttp 调用，并让协程取消立即变成 [Call.cancel]。
-     * 仅调用 job.cancel() 无法唤醒阻塞在 socket read 上的线程，旧实现会继续读到完整响应，
-     * 甚至把迟到的片段写进下一次重试的气泡。
-     */
-    private suspend fun <T> executeCall(call: Call, block: suspend (Response) -> T): T {
-        val cancellation = currentCoroutineContext().job.invokeOnCompletion(onCancelling = true) {
-            call.cancel()
-        }
-        try {
-            return call.execute().use { response -> block(response) }
-        } finally {
-            cancellation.dispose()
-        }
-    }
 
     private fun httpClientFor(config: LlmConfig): OkHttpClient =
         if (config.thinkingLevel == ThinkingLevel.MAX) {

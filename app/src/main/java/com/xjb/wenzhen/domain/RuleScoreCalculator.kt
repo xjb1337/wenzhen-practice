@@ -2,7 +2,6 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.MedicalCase
-import com.xjb.wenzhen.data.model.MessageRole
 import kotlin.math.ceil
 
 /**
@@ -20,6 +19,7 @@ data class RuleScore(
     val missedQuestions: List<String>,
     /** 规则分的补充说明（例如病例缺少参考治疗方案），会追加到点评的改进建议里。 */
     val notes: List<String> = emptyList(),
+    val diagnosisClues: List<DiagnosisClue> = emptyList(),
 ) {
     val total: Int get() = (coverage + technique + communication + diagnosis + treatment).coerceIn(0, 100)
 }
@@ -44,7 +44,6 @@ object RuleScoreCalculator {
     internal const val NOTE_DIAGNOSIS_TOO_SHORT =
         "初步诊断过短或过于笼统（例如只写一个字、“急性”或“待查”），诊断名称不计分。"
 
-    private val questionMarkers = listOf("？", "?", "吗", "呢", "是否", "有没有", "有无", "多少", "多久", "怎样", "哪里", "什么")
     private val openQuestionMarkers = listOf("什么", "怎么", "怎样", "哪里", "哪儿", "如何", "描述", "说说", "讲讲", "具体")
 
     /** 只统计明确的安抚/共情短语；“需要”“建议”这类医嘱用词不再算沟通加分。 */
@@ -62,9 +61,7 @@ object RuleScoreCalculator {
     ): RuleScore {
         val analysis = QuestionCoverageAnalyzer.analyze(medicalCase, messages)
         val weightTotal = analysis.sumOf { it.importance.coerceAtLeast(1) }
-        val coveredWeight = analysis.filter { item ->
-            item.covered && (item.messageIndexes.size >= minEvidenceFor(medicalCase, item.question))
-        }.sumOf { it.importance.coerceAtLeast(1) }
+        val coveredWeight = analysis.filter { it.covered }.sumOf { it.importance.coerceAtLeast(1) }
         val coverage = if (weightTotal == 0) 0 else (coveredWeight * COVERAGE_MAX + weightTotal / 2) / weightTotal
 
         val coveredQuestions = analysis.filter { it.covered }.map { it.question }
@@ -75,37 +72,39 @@ object RuleScoreCalculator {
 
         // 与证据编号同一口径：transcriptEntries 的 1-based 下标，只含已送达的医生消息。
         val doctorMessages = transcriptEntries(messages).withIndex()
-            .filterNot { isScriptedOpening(it.index, it.value) }
-            .filter { it.value.role == MessageRole.DOCTOR }
+            .filter { isDoctorEvidence(it.index, it.value) }
             .map { DoctorMessage(index = it.index + 1, content = it.value.content) }
         val relevantIndexes = analysis.flatMap { it.messageIndexes }.toSet()
         val dialogue = dialogueStats(doctorMessages, relevantIndexes)
 
         val notes = mutableListOf<String>()
-        val diagnosis = diagnosisScore(medicalCase, initialDiagnosis, diagnosisBasis, notes)
+        val diagnosis = diagnosisNamePoints(medicalCase, initialDiagnosis, notes)
+        val diagnosisClues = if (diagnosis > 0) DiagnosisBasisScoring.find(medicalCase, messages, diagnosisBasis) else emptyList()
+        if (diagnosis > 0 && diagnosisBasis.isNotBlank() && diagnosisClues.isEmpty()) {
+            notes += "诊断依据暂未和本次问诊及病例资料核对上，请写出具体的病史或检查所见。"
+        }
         val treatment = treatmentScore(medicalCase, treatmentAnswer, notes)
 
         return RuleScore(
             coverage = coverage.coerceIn(0, COVERAGE_MAX),
             technique = techniqueScore(dialogue),
             communication = communicationScore(dialogue),
-            diagnosis = diagnosis,
+            diagnosis = (diagnosis + 2 * diagnosisClues.size).coerceIn(0, DIAGNOSIS_MAX),
             treatment = treatment,
             evidence = evidence,
             coveredQuestions = coveredQuestions,
             missedQuestions = missedQuestions,
             notes = notes,
+            diagnosisClues = diagnosisClues,
         )
     }
-
-    private fun minEvidenceFor(medicalCase: MedicalCase, question: String): Int =
-        KeyQuestionCatalog.of(medicalCase).firstOrNull { it.text == question }?.minEvidence ?: 1
 
     // ---------------------------------------------------------------- 问诊技巧与沟通
 
     private data class DoctorMessage(val index: Int, val content: String) {
         /** 去掉标点和空白后的正文，用于判断长度和重复。 */
         val normalized: String = content.lowercase().filter { it.isLetterOrDigit() }
+        val questions = interviewClauses(content).filter { it.isQuestion }
     }
 
     private data class DialogueStats(
@@ -121,19 +120,18 @@ object RuleScoreCalculator {
 
     private fun dialogueStats(messages: List<DoctorMessage>, relevantIndexes: Set<Int>): DialogueStats {
         val distinct = messages.distinctBy { it.normalized }
-        val hasQuestion = { message: DoctorMessage -> questionMarkers.any { message.content.contains(it) } }
         // 有效提问：命中了某个问诊要点，或者是去重后足够长的提问；“嗯？”“还有吗？”不算。
         val substantive = distinct.count { message ->
             message.index in relevantIndexes ||
-                (hasQuestion(message) && message.normalized.length >= SUBSTANTIVE_MIN_LENGTH)
+                (message.questions.any { clause -> clause.text.count(Char::isLetterOrDigit) >= SUBSTANTIVE_MIN_LENGTH })
         }
         val text = messages.joinToString("\n") { it.content }
         return DialogueStats(
             total = messages.size,
-            questionCount = messages.count(hasQuestion),
+            questionCount = messages.count { it.questions.isNotEmpty() },
             relevantCount = messages.count { it.index in relevantIndexes },
             openQuestionCount = distinct.count { message ->
-                openQuestionMarkers.any { message.content.contains(it) }
+                message.questions.any { clause -> openQuestionMarkers.any { clause.text.contains(it) } }
             },
             substantiveCount = substantive,
             duplicateCount = messages.size - distinct.size,
@@ -208,7 +206,7 @@ object RuleScoreCalculator {
     private val bracketContent = Regex("\\([^()]*\\)|【[^【】]*】|\\[[^\\[\\]]*]")
     private val diagnosisNoise = Regex("[\\s,.。、;:·•/\\\\\\-—_~'\"“”‘’!?]+")
     private val diagnosisComponentSeparators = Regex("[,;:、/]|伴有|伴|合并")
-    private val hedgePrefixes = listOf("初步诊断", "诊断为", "诊断", "考虑为", "考虑", "疑似", "可能为", "可能是", "可能")
+    private val hedgePrefixes = listOf("初步诊断", "临床诊断", "拟诊", "诊断为", "诊断", "考虑为", "考虑", "疑似", "可能为", "可能是", "可能")
     private val diagnosisGenericTerms = setOf(
         "急性", "慢性", "亚急性", "待查", "感染", "炎症", "疾病", "综合征", "未知", "不知道", "不清楚", "不确定",
     )
@@ -219,15 +217,17 @@ object RuleScoreCalculator {
     /** 全角转半角、转小写、去括号内容（可选）和标点空白。 */
     internal fun normalizeDiagnosis(text: String, keepBrackets: Boolean = false): String {
         var value = toHalfWidth(text).lowercase()
-        if (!keepBrackets) {
-            // 括号可能嵌套，反复去掉最内层直到稳定。
-            var previous: String
-            do {
-                previous = value
-                value = value.replace(bracketContent, "")
-            } while (value != previous)
-        }
+        if (!keepBrackets) value = withoutBrackets(value)
         return value.replace(diagnosisNoise, "").replace("(", "").replace(")", "")
+    }
+
+    private fun withoutBrackets(text: String): String {
+        var result = text
+        do {
+            val previous = result
+            result = result.replace(bracketContent, "")
+        } while (result != previous)
+        return result
     }
 
     /** 去掉“初步诊断”“考虑”“可能是”等前缀，可叠加出现（例如“初步诊断考虑……”）。 */
@@ -252,20 +252,55 @@ object RuleScoreCalculator {
         }
     }
 
-    private fun diagnosisScore(
+    private val diagnosisClauses = Regex("[,;。!?\\r\\n]+")
+    private val differentialStart = Regex(
+        "^(?:鉴别(?:诊断)?|排查|待排|(?:仍|尚)?(?:需|须|应|待|不能|不可|可|已)?(?:进一步|完全)?(?:排除|除外)|" +
+            "不(?:考虑|支持|符合|是)|否认|不作为(?:初步)?诊断)",
+    )
+    private val differentialEnd = Regex("(?:已排除|已除外|可排除|待排除|待除外|待排|需鉴别|不支持)$")
+    private val differentialAnnotation = Regex("\\((待排除?|已排除|已除外|可排除|待除外|需鉴别|不支持)\\)")
+    private val differentialAfterProposal = Regex("(?:同时|但|并)(?:仍|尚)?(?:需|须|应|要|待)?(?:排除|除外|鉴别)")
+    private val differentialHeading = Regex("^(?:鉴别(?:诊断)?|排除项|排除诊断|待排诊断)\\s*:")
+    private val proposalHeading = Regex("^(?:初步诊断|临床诊断|拟诊|诊断)\\s*:")
+
+    private fun proposedDiagnosis(answer: String): String {
+        // 保留直接修饰诊断的“（待排）”，其余括注在分句前去除，避免括号内逗号割裂主诊断。
+        val clauses = withoutBrackets(toHalfWidth(answer).replace(differentialAnnotation, "$1"))
+            .split(diagnosisClauses)
+        var inDifferentialSection = false
+        return buildString {
+            for (part in clauses) {
+                val clause = part.trim().trimStart('-', '•').trim()
+                if (differentialHeading.containsMatchIn(clause)) inDifferentialSection = true
+                if (proposalHeading.containsMatchIn(clause)) inDifferentialSection = false
+                if (inDifferentialSection) continue
+
+                val exclusion = differentialAfterProposal.find(clause)
+                val proposal = stripHedge(normalizeDiagnosis(clause.substring(0, exclusion?.range?.first ?: clause.length)))
+                if (!differentialStart.containsMatchIn(proposal) && !differentialEnd.containsMatchIn(proposal)) {
+                    append(proposal)
+                }
+            }
+        }
+    }
+
+    private fun diagnosisNamePoints(
         medicalCase: MedicalCase,
         initialDiagnosis: String,
-        diagnosisBasis: String,
         notes: MutableList<String>,
     ): Int {
         if (initialDiagnosis.isBlank()) return 0
-        val nameScore = diagnosisNameScore(medicalCase, initialDiagnosis)
+        val proposed = proposedDiagnosis(initialDiagnosis)
+        if (proposed.isEmpty() && normalizeDiagnosis(initialDiagnosis).isNotEmpty()) {
+            notes += "请在初步诊断中写出倾向的诊断，排除项和待鉴别内容不计入匹配。"
+            return 0
+        }
+        val nameScore = scoreDiagnosisName(medicalCase, proposed)
         if (nameScore == 0) {
             notes += NOTE_DIAGNOSIS_TOO_SHORT
             return 0
         }
-        val basisScore = if (diagnosisBasis.trim().length >= 6) 4 else if (diagnosisBasis.isNotBlank()) 2 else 0
-        return (nameScore + basisScore).coerceIn(0, DIAGNOSIS_MAX)
+        return nameScore
     }
 
     /**
@@ -278,8 +313,10 @@ object RuleScoreCalculator {
      * - 6：填写了合理长度但不相符的诊断（含“非 ST 段抬高”与“ST 段抬高”这类否定词不一致）；
      * - 0：归一化后不足 [MIN_DIAGNOSIS_LENGTH] 个字，或只有“急性”“待查”等笼统词。
      */
-    internal fun diagnosisNameScore(medicalCase: MedicalCase, initialDiagnosis: String): Int {
-        val actual = stripHedge(normalizeDiagnosis(initialDiagnosis))
+    internal fun diagnosisNameScore(medicalCase: MedicalCase, initialDiagnosis: String): Int =
+        scoreDiagnosisName(medicalCase, proposedDiagnosis(initialDiagnosis))
+
+    private fun scoreDiagnosisName(medicalCase: MedicalCase, actual: String): Int {
         if (actual.length < MIN_DIAGNOSIS_LENGTH || actual in diagnosisGenericTerms) return 0
         val core = normalizeDiagnosis(medicalCase.correctDiagnosis)
         if (core.isEmpty()) return 10
@@ -388,60 +425,19 @@ object RuleScoreCalculator {
 
     // ---------------------------------------------------------------- 治疗方案
 
-    private val planSection = Regex("(治疗原则|药物|处理|随访)[：:]")
-
-    /** 药名后紧跟剂量：取剂量前的连续中文/字母作为药名候选。 */
-    private val dosedDrug = Regex(
-        "([\\u4e00-\\u9fffa-z]{2,})\\s*\\d+(?:\\.\\d+)?\\s*(?:mg|g|ml|μg|ug|iu|u|万u|片|粒|枚|支|吸|喷)",
-        RegexOption.IGNORE_CASE,
-    )
-    private val drugFormSuffixes = listOf(
-        "口服溶液", "注射液", "混悬液", "缓释胶囊", "缓释片", "肠溶片", "胶囊", "颗粒", "软膏", "乳膏",
-        "凝胶", "滴眼液", "气雾剂", "片", "栓",
-    )
-    private val doseWords = listOf(
-        "首剂", "负荷", "维持", "每次", "总量", "起始", "剂量", "用量", "口服", "静脉", "静推", "静滴",
-        "肌注", "注射", "加至", "增至", "减至", "改为", "继以", "继续", "约", "以", "至", "予", "用", "加", "共", "每",
-    )
-    private val notDrugChars = listOf("日", "至", "后", "渐", "每", "量", "公式")
-    private val notDrugTerms = setOf("小时", "分钟", "体重", "成人", "儿童", "最大", "最高", "不超过", "单次")
-
-    private val managementSplit = Regex(
-        "[，,。；;：:、（）()\\s/]+|必要时|可用|尽快|立即|首选|及时|并|及|和|或|与|则|后|时|行|予",
-    )
-    private val managementLeading = listOf("直接", "积极", "早期", "急诊", "常规", "继续", "进行", "给予")
-    private val managementGeneric = setOf(
-        "疼痛", "治疗", "处理", "患者", "症状", "必要", "情况", "明显", "加重", "监测", "评估", "观察",
-        "复查", "注意", "避免", "不能", "直接", "尽早", "完善", "本例", "包括", "急诊", "门诊", "控制",
-        "防治", "恢复", "结束", "无效", "加量", "剂量", "感染", "出血", "呼吸", "心率", "体温", "感觉",
-        "睡眠", "压力", "基线", "定位", "共病", "记录", "第一", "重症", "生命", "引起", "低于", "休克",
-    )
-    private val managementLatin = Regex("[a-z][a-z0-9]+")
-    private val managementLatinNoise = Regex("mg|ml|kg|min|ug|iu|spo2|bp|hr|cm|mm|mmhg")
-
-    /**
-     * 治疗方案分（满分 15）：
-     * - 病例没有参考治疗方案：0 分，并在点评中说明（不再给“写满 12 个字就 11 分”的保底）；
-     * - 参考方案有带剂量的药物：药物命中（≤10，按命中比例）+ 处理措施命中（≤5，按命中个数）；
-     * - 参考方案没有可识别的药物：只按处理措施命中个数计分（≤15）。
-     * 药名按“剂量前的药名”抽取，匹配药名末尾 3 个字，避免“阿司匹林300mg嚼服”这类整句子串很难命中。
-     */
     private fun treatmentScore(medicalCase: MedicalCase, treatmentAnswer: String, notes: MutableList<String>): Int {
-        val answer = toHalfWidth(treatmentAnswer).lowercase().trim()
-        if (answer.isEmpty()) return 0
+        if (treatmentAnswer.isBlank()) return 0
         val plan = medicalCase.treatmentPlan.trim()
         if (plan.isEmpty()) {
             notes += NOTE_NO_TREATMENT_PLAN
             return 0
         }
-        val sections = splitPlanSections(plan)
-        val drugText = sections["药物"] ?: plan
-        val managementText = listOfNotNull(sections["治疗原则"], sections["处理"])
-            .joinToString("；")
-            .ifBlank { plan }
-        val drugs = drugKeys(drugText)
-        val managementHits = managementKeys(managementText).count { answer.contains(it) }
-        if (drugs.isEmpty()) {
+        val matched = TreatmentRubric.match(plan, treatmentAnswer)
+        if (matched.mismatched) {
+            notes += "请核对治疗作答中肯定或否定方向与参考方案不一致的要点。"
+        }
+        val managementHits = matched.managementHits
+        if (matched.medications == 0) {
             return when {
                 managementHits >= 4 -> TREATMENT_MAX
                 managementHits == 3 -> 12
@@ -450,8 +446,8 @@ object RuleScoreCalculator {
                 else -> 0
             }
         }
-        val drugHits = drugs.count { answer.contains(it) }
-        val drugRatio = drugHits.toDouble() / drugs.size
+        val drugHits = matched.medicationHits
+        val drugRatio = drugHits.toDouble() / matched.medications
         val drugPoints = when {
             drugRatio >= 0.6 -> 10
             drugRatio >= 0.4 -> 8
@@ -466,59 +462,5 @@ object RuleScoreCalculator {
             else -> 0
         }
         return (drugPoints + managementPoints).coerceIn(0, TREATMENT_MAX)
-    }
-
-    private fun splitPlanSections(plan: String): Map<String, String> {
-        val matches = planSection.findAll(plan).toList()
-        return matches.mapIndexed { index, match ->
-            val end = matches.getOrNull(index + 1)?.range?.first ?: plan.length
-            match.groupValues[1] to plan.substring(match.range.last + 1, end)
-        }.toMap()
-    }
-
-    /** 抽取参考方案中的药名关键字（药名末尾 3 个字；2 个字的药名保留原样）。 */
-    internal fun drugKeys(text: String): List<String> =
-        dosedDrug.findAll(toHalfWidth(text).lowercase())
-            .mapNotNull { match ->
-                var name = stripSuffixes(match.groupValues[1], doseWords + drugFormSuffixes)
-                name = stripSuffixes(name, doseWords)
-                if (name.length < 2 || name in notDrugTerms) return@mapNotNull null
-                val key = if (name.length <= 3) name else name.takeLast(3)
-                key.takeUnless { candidate ->
-                    candidate in notDrugTerms || notDrugChars.any { candidate.contains(it) }
-                }
-            }
-            .distinct()
-            .toList()
-
-    private fun managementKeys(text: String): List<String> {
-        val normalized = toHalfWidth(text).lowercase()
-        val chinese = normalized.split(managementSplit).mapNotNull { segment ->
-            var value = segment.filter { it in '\u4e00'..'\u9fff' }
-            managementLeading.forEach { prefix ->
-                if (value.startsWith(prefix) && value.length > prefix.length) value = value.removePrefix(prefix)
-            }
-            if (value.length < 2) return@mapNotNull null
-            val key = if (value.length <= 4) value else value.takeLast(4)
-            key.takeUnless { it in managementGeneric }
-        }
-        val latin = managementLatin.findAll(normalized)
-            .map { it.value }
-            .filterNot { managementLatinNoise.matches(it) }
-            .toList()
-        return (chinese + latin).distinct()
-    }
-
-    private fun stripSuffixes(value: String, suffixes: List<String>): String {
-        var result = value
-        var changed = true
-        while (changed) {
-            changed = false
-            suffixes.firstOrNull { result.endsWith(it) && result.length > it.length }?.let {
-                result = result.removeSuffix(it)
-                changed = true
-            }
-        }
-        return result
     }
 }

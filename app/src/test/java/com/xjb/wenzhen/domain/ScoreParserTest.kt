@@ -1,6 +1,7 @@
 package com.xjb.wenzhen.domain
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
@@ -134,6 +135,15 @@ class ScoreParserTest {
     }
 
     @Test
+    fun `读取存档以保存的总分为准且不把缺失分项补为零`() {
+        val legacy = """{"totalScore":90,"breakdown":{"coverage":30,"technique":12,"communication":15,"diagnosis":18}}"""
+        assertEquals(92, ScoreParser.parseStored(legacy, 92)?.totalScore)
+        assertEquals(75, ScoreParser.parse(legacy).totalScore)
+        assertNull(ScoreParser.parseStored("""{"totalScore":72}""", 72))
+        assertNull(ScoreParser.parseStored("损坏的评分详情", 72))
+    }
+
+    @Test
     fun `旧版无治疗分项的记录沿用旧满分不截断`() {
         val raw = """{"totalScore": 92, "breakdown": {"questioningCoverage": 38, "techniqueAndOrder": 18, "communication": 18, "diagnosisAccuracy": 18}}"""
         val result = ScoreParser.parse(raw)
@@ -142,5 +152,8 @@ class ScoreParserTest {
         assertEquals(18, result.techniqueScore)
         assertEquals(40, result.coverageMax)
         assertEquals(92, result.totalScore)
+
+        val roundTrip = requireNotNull(ScoreParser.parseStored(ScoreParser.encode(result), 92))
+        assertEquals(result, roundTrip)
     }
 }

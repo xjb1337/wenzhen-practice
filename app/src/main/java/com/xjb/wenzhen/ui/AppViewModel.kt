@@ -23,6 +23,7 @@ import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.BaseUrlPolicy
+import com.xjb.wenzhen.data.settings.normalizeModel
 import com.xjb.wenzhen.data.update.UpdateCheckResult
 import com.xjb.wenzhen.domain.CaseGenerationSelection
 import com.xjb.wenzhen.domain.DOCTOR_OPENING_LINE
@@ -30,23 +31,47 @@ import com.xjb.wenzhen.domain.OfflinePracticeService
 import com.xjb.wenzhen.domain.ReferenceCarePlanBuilder
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
+import com.xjb.wenzhen.domain.ScoreParseException
+import com.xjb.wenzhen.domain.StatsCalculator
+import com.xjb.wenzhen.domain.StatsRecord
 import com.xjb.wenzhen.domain.ScoreResult
 import com.xjb.wenzhen.domain.ScoreService
 import com.xjb.wenzhen.ui.theme.AppTheme
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelChildren
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 class AppViewModel(
     private val container: AppContainer,
@@ -54,17 +79,59 @@ class AppViewModel(
 ) : ViewModel() {
     private val _uiState = MutableStateFlow(
         initialUiState ?: AppUiState(
-            settings = runCatching { container.settingsRepository.load() }
-                .getOrDefault(AppSettings()),
+            settingsRead = SettingsReadState.Loading,
             currentVersionName = container.currentVersionName,
             currentVersionCode = container.currentVersionCode,
         )
     )
     val uiState: StateFlow<AppUiState> = _uiState.asStateFlow()
 
+    private val statsRefresh = MutableStateFlow(0)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val statsState: StateFlow<StatsUiState> = statsRefresh
+        .flatMapLatest {
+            flow { emitAll(container.consultationRepository.observeScores()) }
+                .distinctUntilChanged()
+                .mapLatest { rows ->
+                    val records = rows.map { row ->
+                        currentCoroutineContext().ensureActive()
+                        val missed = try {
+                            ScoreParser.parse(row.scoreJson).missedQuestions
+                        } catch (_: ScoreParseException) {
+                            emptyList()
+                        }
+                        StatsRecord(row.id, row.department, row.totalScore, row.createdAt, missed)
+                    }
+                    val ready: StatsUiState = StatsUiState.Ready(StatsCalculator.calculate(records))
+                    ready
+                }
+                .flowOn(Dispatchers.Default)
+                .onStart { emit(StatsUiState.Loading) }
+                .catch { error ->
+                    emit(StatsUiState.Failed(friendlyMessage(error, "成绩统计加载失败，请重试。")))
+                }
+        }
+        .stateIn(
+            viewModelScope,
+            SharingStarted.WhileSubscribed(stopTimeoutMillis = 5_000, replayExpirationMillis = 0),
+            StatsUiState.Loading,
+        )
+
+    fun retryStats() {
+        statsRefresh.update { it + 1 }
+    }
+
     private val _events = Channel<AppEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
+    private val onlineActions = CoroutineScope(
+        viewModelScope.coroutineContext + SupervisorJob(viewModelScope.coroutineContext[Job]),
+    )
+
+    private var settingsReadJob: Job? = null
+    private val settingsWriteMutex = Mutex()
+    private var updateDownloadJob: Job? = null
     private var historyJob: Job? = null
     private var historyDetailJob: Job? = null
     private var historyDetailGeneration = 0L
@@ -85,9 +152,40 @@ class AppViewModel(
     private var clinicalGeneration = 0L
 
     init {
+        if (initialUiState == null) reloadSettings()
         observeHistory()
         observeDraft()
         observeSavedCases()
+    }
+
+    fun reloadSettings() {
+        if (_uiState.value.settingsRead == SettingsReadState.Ready || settingsReadJob?.isActive == true) return
+        val previous = _uiState.value.settingsRead
+        _uiState.update { it.copy(settingsRead = SettingsReadState.Loading) }
+        settingsReadJob = viewModelScope.launch {
+            try {
+                val settings = withContext(Dispatchers.IO) { container.settingsRepository.load() }
+                _uiState.update {
+                    it.copy(settings = settings, settingsRead = SettingsReadState.Ready, settingsSaveError = null)
+                }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _uiState.update {
+                    it.copy(settingsRead = previous as? SettingsReadState.Unavailable ?: SettingsReadState.Unavailable())
+                }
+            }
+        }
+    }
+
+    fun continueOfflineWithoutSettings() {
+        _uiState.update { state ->
+            val unavailable = state.settingsRead as? SettingsReadState.Unavailable ?: return@update state
+            state.copy(
+                settings = AppSettings(offlineMode = true),
+                settingsRead = unavailable.copy(temporaryOffline = true),
+            )
+        }
     }
 
     override fun onCleared() {
@@ -122,7 +220,8 @@ class AppViewModel(
     ) {
         cancelPendingRequests()
         draftPersistenceEnabled = true
-        val startedAt = System.currentTimeMillis()
+        val previousStartedAt = _uiState.value.consultationStartedAt
+        val startedAt = maxOf(System.currentTimeMillis(), (previousStartedAt ?: 0L) + 1)
         val doctorOpeningMessage = ChatMessage(
             role = MessageRole.DOCTOR,
             content = DOCTOR_OPENING_LINE,
@@ -147,35 +246,113 @@ class AppViewModel(
                 currentResult = null,
             )
         }
-        scheduleDraftSave()
-        viewModelScope.launch { _events.send(AppEvent.OpenChat) }
+        flushDraft()
+        viewModelScope.launch { _events.send(AppEvent.OpenChat(startedAt)) }
     }
 
     fun setOfflineMode(enabled: Boolean) {
-        val updated = _uiState.value.settings.copy(offlineMode = enabled)
-        runCatching { container.settingsRepository.save(updated) }
-            .onSuccess { _uiState.update { it.copy(settings = updated) } }
+        val state = _uiState.value
+        if (state.settingsRead != SettingsReadState.Ready || state.pendingOfflineMode != null ||
+            state.settings.offlineMode == enabled
+        ) return
+        _uiState.update { it.copy(pendingOfflineMode = enabled) }
+        if (enabled) {
+            cancelCurrentRequest()
+            onlineActions.coroutineContext.cancelChildren()
+            _uiState.update {
+                it.copy(
+                    isGeneratingCase = false,
+                    generationError = null,
+                    regeneratingCommentId = null,
+                    connectionTest = ConnectionTestUiState(),
+                )
+            }
+        }
+        viewModelScope.launch {
+            try {
+                persistSettings { it.copy(offlineMode = enabled) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                _events.send(AppEvent.ShowMessage("离线练习设置保存失败，请重试。"))
+            } finally {
+                _uiState.update { it.copy(pendingOfflineMode = null) }
+            }
+        }
     }
 
-    /** 主题即点即存；MainActivity 通过 uiState.settings.theme 驱动 WenzhenTheme。 */
     fun setTheme(theme: AppTheme) {
-        val updated = _uiState.value.settings.copy(theme = theme)
-        runCatching { container.settingsRepository.save(updated) }
-            .onSuccess { _uiState.update { it.copy(settings = updated) } }
+        when (_uiState.value.settingsRead) {
+            is SettingsReadState.Unavailable -> {
+                _uiState.update { it.copy(settings = it.settings.copy(theme = theme)) }
+            }
+            SettingsReadState.Loading -> return
+            SettingsReadState.Ready -> viewModelScope.launch {
+                try {
+                    persistSettings { it.copy(theme = theme) }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    _events.send(AppEvent.ShowMessage("主题保存失败，请重试。"))
+                }
+            }
+        }
     }
 
-    /** 首次启动的隐私与 AI 使用告知确认。保存失败也先放行本次会话，下次启动会再次提示。 */
     fun acceptPrivacyNotice() {
-        val updated = _uiState.value.settings.copy(privacyAccepted = true)
-        runCatching { container.settingsRepository.save(updated) }
-        _uiState.update { it.copy(settings = updated) }
+        val state = _uiState.value
+        if (state.settingsRead == SettingsReadState.Loading ||
+            state.settings.privacyAccepted || state.acceptingPrivacyNotice
+        ) return
+        if (state.settingsRead is SettingsReadState.Unavailable) {
+            _uiState.update { it.copy(settings = it.settings.copy(privacyAccepted = true)) }
+            return
+        }
+
+        _uiState.update { it.copy(acceptingPrivacyNotice = true) }
+        viewModelScope.launch {
+            try {
+                persistSettings { it.copy(privacyAccepted = true) }
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                // 用户已明确同意。写入失败时仍放行本次会话。
+                _uiState.update { it.copy(settings = it.settings.copy(privacyAccepted = true)) }
+                _events.send(AppEvent.ShowMessage("本次已同意。隐私设置未能写入本机。"))
+            } finally {
+                _uiState.update { it.copy(acceptingPrivacyNotice = false) }
+            }
+        }
+    }
+
+    private suspend fun persistSettings(update: (AppSettings) -> AppSettings) {
+        settingsWriteMutex.withLock {
+            val updated = update(_uiState.value.settings)
+            withContext(Dispatchers.IO) { container.settingsRepository.save(updated) }
+            _uiState.update { it.copy(settings = updated) }
+        }
     }
 
     fun resumeDraft() {
         val draft = _uiState.value.draft ?: return
+        if (activateDraft(draft)) {
+            viewModelScope.launch { _events.send(AppEvent.OpenChat(draft.startedAt)) }
+        } else {
+            viewModelScope.launch { _events.send(AppEvent.ShowMessage("无法读取这份草稿，可以放弃草稿后重新开始。")) }
+        }
+    }
+
+    fun restoreConsultation(startedAt: Long) {
+        val state = _uiState.value
+        if (state.draftLoading || state.activeCase != null) return
+        val draft = state.draft?.takeIf { it.startedAt == startedAt } ?: return
+        activateDraft(draft)
+    }
+
+    private fun activateDraft(draft: ConsultationDraftEntity): Boolean {
+        val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return false
         cancelPendingRequests()
         draftPersistenceEnabled = true
-        val medicalCase = runCatching { CaseJsonCodec.decode(draft.caseJson) }.getOrNull() ?: return
         val messages = ensureDoctorOpening(
             reconcileRecoveredConversation(ConversationJsonCodec.decode(draft.conversationJson)),
             draft.startedAt,
@@ -194,7 +371,7 @@ class AppViewModel(
                 currentResult = null,
             )
         }
-        viewModelScope.launch { _events.send(AppEvent.OpenChat) }
+        return true
     }
 
     /**
@@ -228,9 +405,12 @@ class AppViewModel(
         draftSaveJob?.cancel()
         draftSaveJob = null
         launchDb("清除草稿失败，请稍后重试。") {
-            draftMutex.withLock { container.consultationDraftRepository.clear() }
+            draftMutex.withLock {
+                if (draftPersistenceEnabled) return@withLock
+                container.consultationDraftRepository.clear()
+                _uiState.update { it.copy(draft = null) }
+            }
         }
-        _uiState.update { it.copy(draft = null) }
     }
 
     fun sendMessage(text: String) {
@@ -353,8 +533,8 @@ class AppViewModel(
         patientReplyJob = viewModelScope.launch {
             val startedAt = System.currentTimeMillis()
             try {
-                if (_uiState.value.settings.offlineMode) {
-                    val reply = OfflinePracticeService.patientReply(medicalCase, conversation)
+                if (_uiState.value.offlineMode) {
+                    val reply = OfflinePracticeService.patientReply(medicalCase, conversation, personality)
                     _uiState.update { latest ->
                         if (generation != patientReplyGeneration) return@update latest
                         finishPatientReply(
@@ -545,12 +725,12 @@ class AppViewModel(
             return
         }
 
-        _uiState.update { it.copy(isQueryingClinical = true, chatError = null) }
+        _uiState.update { it.copy(isQueryingClinical = true, chatError = null, requestNotice = null) }
         val generation = ++clinicalGeneration
         clinicalJob = viewModelScope.launch {
             try {
-                val result = if (state.settings.offlineMode) {
-                    OfflinePracticeService.clinicalResult(medicalCase, requestType)
+                val result = if (state.offlineMode) {
+                    OfflinePracticeService.clinicalResult(medicalCase, requestType, normalizedItem)
                 } else {
                     container.clinicalDataService.request(
                         config = state.settings.toLlmConfig(),
@@ -562,6 +742,11 @@ class AppViewModel(
                 _uiState.update { latest ->
                     if (latest.activeCase?.id != medicalCase.id || generation != clinicalGeneration) {
                         latest
+                    } else if (result == null) {
+                        latest.copy(
+                            isQueryingClinical = false,
+                            requestNotice = "病例资料未记录「$normalizedItem」的结果。",
+                        )
                     } else {
                         latest.copy(
                             messages = latest.messages + ChatMessage(
@@ -593,6 +778,10 @@ class AppViewModel(
     fun generateCase(selection: CaseGenerationSelection) {
         val state = _uiState.value
         if (state.isGeneratingCase) return
+        if (state.offlineMode) {
+            viewModelScope.launch { _events.send(AppEvent.ShowMessage(AppSettings.OFFLINE_AI_MESSAGE)) }
+            return
+        }
         if (!state.hasApiKey) {
             _uiState.update {
                 it.copy(generationError = "${state.settings.aiSetupMessage}再生成病例。")
@@ -603,10 +792,11 @@ class AppViewModel(
 
         val beforeCaseId = state.activeCase?.id
         val beforeStartedAt = state.consultationStartedAt
+        val canStartGeneratedCase = !state.draftLoading && state.draft == null
         _uiState.update {
             it.copy(isGeneratingCase = true, generationError = null)
         }
-        viewModelScope.launch {
+        onlineActions.launch {
             try {
                 val resolved = selection.resolve()
                 val (generated, finalPersonality) = container.caseGenerationService.generate(
@@ -616,6 +806,7 @@ class AppViewModel(
                     personality = resolved.personality,
                     encounterType = resolved.encounterType,
                 )
+                currentCoroutineContext().ensureActive()
                 container.savedCaseRepository.save(
                     SavedCaseEntity(
                         id = generated.id,
@@ -623,15 +814,13 @@ class AppViewModel(
                         createdAt = System.currentTimeMillis(),
                     )
                 )
+                currentCoroutineContext().ensureActive()
                 _uiState.update { latest ->
-                    latest.copy(
-                        cases = listOf(generated) + latest.cases,
-                        isGeneratingCase = false,
-                        generationError = null,
-                    )
+                    latest.copy(cases = listOf(generated) + latest.cases.filterNot { it.id == generated.id })
                 }
                 val current = _uiState.value
-                if (current.activeCase?.id == beforeCaseId &&
+                if (canStartGeneratedCase && current.draft == null &&
+                    current.activeCase?.id == beforeCaseId &&
                     current.consultationStartedAt == beforeStartedAt
                 ) {
                     openCase(generated, finalPersonality, resolved.encounterType)
@@ -643,9 +832,12 @@ class AppViewModel(
             } catch (error: Exception) {
                 _uiState.update {
                     it.copy(
-                        isGeneratingCase = false,
                         generationError = friendlyMessage(error, "病例生成失败，请稍后重试。"),
                     )
+                }
+            } finally {
+                if (currentCoroutineContext().isActive) {
+                    _uiState.update { it.copy(isGeneratingCase = false) }
                 }
             }
         }
@@ -678,7 +870,7 @@ class AppViewModel(
             return
         }
         val state = _uiState.value
-        if (state.isFinishing) return
+        if (state.isFinishing || state.currentResult != null) return
         val medicalCase = state.activeCase
         if (medicalCase == null) {
             _uiState.update { it.copy(finishError = "当前没有进行中的病例。") }
@@ -700,23 +892,17 @@ class AppViewModel(
         _uiState.update { it.copy(isFinishing = true, finishError = null) }
         viewModelScope.launch {
             try {
-                val recordResult: Result<String>
-                val scoreResult: Result<ScoreResult>
-                if (state.settings.offlineMode) {
-                    recordResult = if (generateRecord) {
-                        runCatching {
-                            OfflinePracticeService.record(
-                                medicalCase,
-                                diagnosis,
-                                diagnosisBasis.trim(),
-                                treatmentAnswer.trim(),
-                                state.encounterType,
-                            )
-                        }
-                    } else {
-                        Result.success("")
+                fun localAssessment(): Pair<Result<String>, Result<ScoreResult>> {
+                    val record = runCatching {
+                        if (generateRecord) OfflinePracticeService.record(
+                            medicalCase,
+                            diagnosis,
+                            diagnosisBasis.trim(),
+                            treatmentAnswer.trim(),
+                            state.encounterType,
+                        ) else ""
                     }
-                    scoreResult = runCatching {
+                    val score = runCatching {
                         OfflinePracticeService.score(
                             medicalCase,
                             conversation,
@@ -726,8 +912,14 @@ class AppViewModel(
                             diagnosisBasis.trim(),
                         )
                     }
+                    return record to score
+                }
+
+                var switchedToOffline = false
+                val (recordResult, scoreResult) = if (_uiState.value.offlineMode) {
+                    localAssessment()
                 } else {
-                    coroutineScope {
+                    val assessment = onlineActions.async {
                         val recordTask = async {
                             runCatching {
                                 if (generateRecord) container.medicalRecordService.generate(
@@ -754,8 +946,16 @@ class AppViewModel(
                                 )
                             }
                         }
-                        recordResult = recordTask.await()
-                        scoreResult = scoreTask.await()
+                        recordTask.await() to scoreTask.await()
+                    }
+                    try {
+                        assessment.await()
+                    } catch (error: kotlinx.coroutines.CancellationException) {
+                        currentCoroutineContext().ensureActive()
+                        // The online scope was cancelled by an offline-mode switch. The
+                        // surrounding submission still owns the local assessment and save.
+                        switchedToOffline = true
+                        localAssessment()
                     }
                 }
 
@@ -808,6 +1008,7 @@ class AppViewModel(
                     return@launch
                 }
                 val notice = listOfNotNull(
+                    "已切换至离线练习，本次使用本地规则评分。".takeIf { switchedToOffline },
                     if (score.aiCommentFailed) {
                         "AI 点评生成失败，分数已按本地规则计算并保存到历史记录，可在“点评”页重新生成：" +
                             (score.aiCommentError ?: "请稍后重试")
@@ -838,21 +1039,35 @@ class AppViewModel(
                     notice = notice,
                     isAiGeneratedCase = medicalCase.isAiGenerated,
                 )
+                draftPersistenceEnabled = false
+                draftSaveJob?.cancel()
+                draftSaveJob = null
+                try {
+                    draftMutex.withLock {
+                        if (!draftPersistenceEnabled) container.consultationDraftRepository.clear()
+                    }
+                } catch (error: kotlinx.coroutines.CancellationException) {
+                    throw error
+                } catch (_: Exception) {
+                    // 历史已经提交。启动时会再次清理残留草稿，不能让用户重复提交。
+                }
+
+                if (_uiState.value.activeCase?.id != sessionKey.first ||
+                    _uiState.value.consultationStartedAt != sessionKey.second
+                ) {
+                    _uiState.update { it.copy(isFinishing = false) }
+                    _events.send(AppEvent.ShowMessage("上一次问诊「${medicalCase.title}」已保存到历史记录。"))
+                    return@launch
+                }
                 _uiState.update {
                     it.copy(
                         isFinishing = false,
                         finishError = null,
                         currentResult = result,
+                        draft = null,
                     )
                 }
-                // 走到这里说明本次问诊已经写入历史：此时才清掉草稿，
-                // 并停止后续 onStop/flushDraft 再把它写回来。
-                draftPersistenceEnabled = false
-                draftSaveJob?.cancel()
-                draftSaveJob = null
-                draftMutex.withLock { container.consultationDraftRepository.clear() }
-                _uiState.update { it.copy(draft = null) }
-                _events.send(AppEvent.OpenResult)
+                _events.send(AppEvent.OpenResult(resultId))
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -884,12 +1099,16 @@ class AppViewModel(
 
     /**
      * 结果页/历史详情的“重新生成 AI 点评”：按记录 id 从历史表读回病例、对话和作答，只补跑 LLM 点评。
-     * 分数仍由本地规则计算；成功后覆盖同一条记录的 scoreJson，失败时保留原记录并给出提示。
+     * 该操作只更新文字点评。存档的总分、分项和证据在规则升级后也保持原值。
      */
     fun regenerateAiComment(recordId: Long) {
         if (recordId <= 0L) return
         val state = _uiState.value
         if (state.regeneratingCommentId != null) return
+        if (state.offlineMode) {
+            updateResultView(recordId) { it.copy(notice = AppSettings.OFFLINE_AI_MESSAGE) }
+            return
+        }
         if (!state.hasApiKey) {
             updateResultView(recordId) {
                 it.copy(notice = "生成 AI 点评需要联网：${state.settings.aiSetupMessage}")
@@ -899,10 +1118,12 @@ class AppViewModel(
         }
         val config = state.settings.toLlmConfig()
         _uiState.update { it.copy(regeneratingCommentId = recordId) }
-        viewModelScope.launch {
+        onlineActions.launch {
             try {
                 val entity = container.consultationRepository.getById(recordId)
                     ?: throw IllegalStateException("这条问诊记录不存在或已被删除。")
+                val storedScore = ScoreParser.parseStored(entity.scoreJson, entity.totalScore)
+                    ?: error("这条记录缺少可用的评分明细。")
                 val score = container.scoreService.evaluate(
                     config = config,
                     medicalCase = CaseJsonCodec.decode(entity.caseJson),
@@ -912,13 +1133,25 @@ class AppViewModel(
                     encounterType = EncounterType.from(entity.encounterType),
                     treatmentAnswer = entity.treatmentAnswer,
                 )
+                currentCoroutineContext().ensureActive()
                 if (score.aiCommentFailed) {
                     updateResultView(recordId) {
                         it.copy(notice = "AI 点评仍未生成：${score.aiCommentError ?: "请稍后重试"}。分数已保存，可稍后再试。")
                     }
                 } else {
-                    container.consultationRepository.updateScore(recordId, ScoreParser.encode(score), score.totalScore)
-                    updateResultView(recordId) { it.copy(score = score, notice = null) }
+                    val updatedScore = storedScore.copy(
+                        strengths = score.strengths,
+                        improvements = score.improvements,
+                        diagnosisExplanation = score.diagnosisExplanation,
+                        aiCommentStatus = score.aiCommentStatus,
+                        aiCommentError = null,
+                    )
+                    container.consultationRepository.updateScore(
+                        recordId, ScoreParser.encode(updatedScore), updatedScore.totalScore,
+                    )
+                    updateResultView(recordId) {
+                        it.copy(score = updatedScore, savedTotalScore = updatedScore.totalScore, notice = null)
+                    }
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
@@ -927,7 +1160,9 @@ class AppViewModel(
                     it.copy(notice = "AI 点评重新生成失败：${friendlyMessage(error, "请稍后重试")}")
                 }
             } finally {
-                _uiState.update { it.copy(regeneratingCommentId = null) }
+                if (currentCoroutineContext().isActive) {
+                    _uiState.update { it.copy(regeneratingCommentId = null) }
+                }
             }
         }
     }
@@ -947,37 +1182,46 @@ class AppViewModel(
         baseUrl: String,
         thinkingLevel: ThinkingLevel = _uiState.value.settings.thinkingLevel,
         generateRecord: Boolean = _uiState.value.settings.generateRecord,
+        exit: SettingsExit? = null,
     ) {
-        val currentSettings = _uiState.value.settings
-        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
-        if (normalizedUrl == null) {
-            _uiState.update {
-                it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。")
-            }
+        val state = _uiState.value
+        if (state.settingsFormSaving) return
+        if (state.settingsRead != SettingsReadState.Ready) {
+            _uiState.update { it.copy(settingsSaveError = "重新读取本机设置后即可保存。") }
             return
         }
-        val newSettings = currentSettings.copy(
-            apiKey = apiKey.trim(),
-            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
-            baseUrl = normalizedUrl,
-            thinkingLevel = thinkingLevel,
-            generateRecord = generateRecord,
-        )
-        try {
-            container.settingsRepository.save(newSettings)
-            _uiState.update {
-                it.copy(
-                    settings = newSettings,
-                    settingsSaveError = null,
-                    chatError = null,
-                )
-            }
-            viewModelScope.launch { _events.send(AppEvent.SettingsSaved) }
-        } catch (error: Exception) {
-            _uiState.update {
-                it.copy(
-                    settingsSaveError = friendlyMessage(error, "设置保存失败，请稍后重试。"),
-                )
+        val normalizedUrl = BaseUrlPolicy.normalizeHttps(baseUrl)
+        if (normalizedUrl == null) {
+            _uiState.update { it.copy(settingsSaveError = "Base URL 必须使用 HTTPS（以 https:// 开头）。") }
+            return
+        }
+        if (!BaseUrlPolicy.isOfficialEndpoint(normalizedUrl)) {
+            _uiState.update { it.copy(settingsSaveError = "请使用 DeepSeek 官方接口。") }
+            return
+        }
+        _uiState.update { it.copy(settingsFormSaving = true, settingsSaveError = null) }
+        viewModelScope.launch {
+            try {
+                persistSettings { current ->
+                    current.copy(
+                        apiKey = apiKey.trim(),
+                        model = normalizeModel(model),
+                        baseUrl = AppSettings.DEFAULT_BASE_URL,
+                        thinkingLevel = thinkingLevel,
+                        generateRecord = generateRecord,
+                        legacyEndpointNeedsKey = current.legacyEndpointNeedsKey && apiKey.isBlank(),
+                    )
+                }
+                _uiState.update { it.copy(chatError = null) }
+                _events.send(AppEvent.SettingsSaved(exit))
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                val message = "设置保存失败，请稍后重试。"
+                _uiState.update { it.copy(settingsSaveError = message) }
+                _events.send(AppEvent.ShowMessage(message))
+            } finally {
+                _uiState.update { it.copy(settingsFormSaving = false) }
             }
         }
     }
@@ -992,7 +1236,12 @@ class AppViewModel(
         baseUrl: String,
         thinkingLevel: ThinkingLevel = ThinkingLevel.OFF,
     ) {
-        if (_uiState.value.connectionTest.isTesting) return
+        val state = _uiState.value
+        if (state.connectionTest.isTesting) return
+        if (state.offlineMode) {
+            _uiState.update { it.copy(connectionTest = ConnectionTestUiState(message = AppSettings.OFFLINE_AI_MESSAGE)) }
+            return
+        }
         val key = apiKey.trim()
         if (key.isEmpty()) {
             _uiState.update {
@@ -1017,16 +1266,22 @@ class AppViewModel(
             }
             return
         }
+        if (!BaseUrlPolicy.isOfficialEndpoint(normalizedUrl)) {
+            _uiState.update {
+                it.copy(connectionTest = ConnectionTestUiState(message = "请使用 DeepSeek 官方接口。", isSuccess = false))
+            }
+            return
+        }
         val config = AppSettings(
             apiKey = key,
-            model = model.trim().ifBlank { AppSettings.MODEL_FLASH },
-            baseUrl = normalizedUrl,
+            model = normalizeModel(model),
             thinkingLevel = thinkingLevel,
         ).toLlmConfig()
         _uiState.update { it.copy(connectionTest = ConnectionTestUiState(isTesting = true)) }
-        viewModelScope.launch {
+        onlineActions.launch {
             try {
                 val result = container.llmClient.testConnection(config)
+                currentCoroutineContext().ensureActive()
                 _uiState.update {
                     it.copy(
                         connectionTest = when (result) {
@@ -1052,6 +1307,10 @@ class AppViewModel(
                         )
                     )
                 }
+            } finally {
+                if (currentCoroutineContext().isActive) {
+                    _uiState.update { it.copy(connectionTest = it.connectionTest.copy(isTesting = false)) }
+                }
             }
         }
     }
@@ -1064,7 +1323,6 @@ class AppViewModel(
             try {
                 when (val result = container.updateChecker.checkForUpdate(
                     currentVersionCode = container.currentVersionCode,
-                    currentVersionName = container.currentVersionName,
                 )) {
                     UpdateCheckResult.UpToDate -> _uiState.update {
                         it.copy(updateState = UpdateUiState.UpToDate)
@@ -1108,7 +1366,7 @@ class AppViewModel(
             else -> null
         } ?: return
         _uiState.update { it.copy(updateState = UpdateUiState.Downloading(update, 0)) }
-        viewModelScope.launch {
+        updateDownloadJob = viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             try {
                 val file = container.updateChecker.downloadApk(update) { progress ->
                     _uiState.update { latest ->
@@ -1124,6 +1382,7 @@ class AppViewModel(
                     it.copy(updateState = UpdateUiState.Downloaded(update, file))
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
+                _uiState.update { it.copy(updateState = UpdateUiState.Available(update)) }
                 throw error
             } catch (error: Exception) {
                 _uiState.update {
@@ -1139,7 +1398,10 @@ class AppViewModel(
     }
 
     fun dismissUpdateDialog() {
-        if (_uiState.value.updateState is UpdateUiState.Downloading) return
+        if (_uiState.value.updateState is UpdateUiState.Downloading) {
+            updateDownloadJob?.cancel()
+            return
+        }
         _uiState.update { it.copy(updateState = UpdateUiState.Idle) }
     }
 
@@ -1157,28 +1419,31 @@ class AppViewModel(
             try {
                 val entity = container.consultationRepository.getById(id)
                     ?: throw IllegalStateException("这条问诊记录不存在或已被删除。")
-                val score = ScoreParser.parse(entity.scoreJson)
-                val encounterType = EncounterType.from(entity.encounterType)
-                val medicalCase = runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
-                val result = ResultViewData(
-                    recordId = entity.id,
-                    caseTitle = entity.caseTitle,
-                    department = entity.department,
-                    patientName = entity.patientName,
-                    difficulty = entity.difficulty,
-                    createdAt = entity.createdAt,
-                    medicalRecord = entity.medicalRecord,
-                    score = score,
-                    initialDiagnosis = entity.initialDiagnosis,
-                    diagnosisBasis = entity.diagnosisBasis,
-                    treatmentAnswer = entity.treatmentAnswer,
-                    encounterType = encounterType,
-                    messages = ConversationJsonCodec.decode(entity.conversationJson),
-                    referenceCarePlan = medicalCase?.let {
-                        ReferenceCarePlanBuilder.build(it, encounterType)
-                    },
-                    isAiGeneratedCase = medicalCase?.isAiGenerated == true,
-                )
+                val result = withContext(Dispatchers.Default) {
+                    val score = ScoreParser.parseStored(entity.scoreJson, entity.totalScore)
+                    val encounterType = EncounterType.from(entity.encounterType)
+                    val medicalCase = runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
+                    ResultViewData(
+                        recordId = entity.id,
+                        caseTitle = entity.caseTitle,
+                        department = entity.department,
+                        patientName = entity.patientName,
+                        difficulty = entity.difficulty,
+                        createdAt = entity.createdAt,
+                        medicalRecord = entity.medicalRecord,
+                        score = score,
+                        initialDiagnosis = entity.initialDiagnosis,
+                        diagnosisBasis = entity.diagnosisBasis,
+                        treatmentAnswer = entity.treatmentAnswer,
+                        encounterType = encounterType,
+                        messages = ConversationJsonCodec.decode(entity.conversationJson),
+                        referenceCarePlan = medicalCase?.let {
+                            ReferenceCarePlanBuilder.build(it, encounterType)
+                        },
+                        isAiGeneratedCase = medicalCase?.isAiGenerated == true,
+                        savedTotalScore = entity.totalScore,
+                    )
+                }
                 if (generation != historyDetailGeneration) return@launch
                 _uiState.update {
                     it.copy(
@@ -1218,18 +1483,62 @@ class AppViewModel(
         launchDb("清空历史记录失败，请稍后重试。") { container.consultationRepository.clear() }
     }
 
-    fun restoreHistory(records: List<ConsultationEntity>) {
-        if (records.isEmpty()) return
-        launchDb("恢复历史记录失败，请稍后重试。") {
+    fun restoreHistory(records: Flow<ConsultationEntity>) {
+        transferHistory(HistoryTransfer.RESTORING, "恢复失败") {
             val restored = container.consultationRepository.restoreAll(records)
-            _events.send(AppEvent.ShowMessage("已恢复 $restored 条"))
+            if (restored == 0) "备份中的记录已存在" else "已恢复 $restored 条"
+        }
+    }
+
+    suspend fun loadHistoryForExport(): List<ConsultationEntity> = withContext(Dispatchers.IO) {
+        container.consultationRepository.observeAll().first().also {
+            require(it.isNotEmpty()) { "没有可导出的问诊记录" }
+        }
+    }
+
+    suspend fun loadHistoryDuration(recordId: Long): Long? = withContext(Dispatchers.IO) {
+        try {
+            val json = container.consultationRepository.getConversationJson(recordId) ?: return@withContext null
+            val messages = ConversationJsonCodec.decode(json).filter { it.timestamp > 0 }
+            if (messages.size < 2) return@withContext null
+            val minutes = (messages.maxOf { it.timestamp } - messages.minOf { it.timestamp }) / 60_000
+            minutes.takeIf { it > 0 }
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun saveHistoryBackup(write: suspend (List<ConsultationEntity>) -> Unit) {
+        transferHistory(HistoryTransfer.SAVING, "保存备份失败") {
+            val records = loadHistoryForExport()
+            withContext(Dispatchers.IO) { write(records) }
+            "已保存备份（${records.size} 条）"
+        }
+    }
+
+    private fun transferHistory(operation: HistoryTransfer, failureLabel: String, transfer: suspend () -> String) {
+        if (_uiState.value.historyTransfer != null) return
+        _uiState.update { it.copy(historyTransfer = operation) }
+        viewModelScope.launch {
+            try {
+                _events.send(AppEvent.ShowMessage(transfer()))
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _events.send(AppEvent.ShowMessage("$failureLabel：${friendlyMessage(error, "请稍后重试")}"))
+            } finally {
+                _uiState.update { it.copy(historyTransfer = null) }
+            }
         }
     }
 
     private fun observeHistory() {
         historyJob?.cancel()
         historyJob = viewModelScope.launch {
-            container.consultationRepository.observeAll()
+            flow { emitAll(container.consultationRepository.observeHistory()) }
+                .flowOn(Dispatchers.IO)
                 .catch { error ->
                     _uiState.update {
                         it.copy(
@@ -1253,25 +1562,28 @@ class AppViewModel(
     private fun observeDraft() {
         viewModelScope.launch {
             try {
-                val draft = container.consultationDraftRepository.get()
-                if (draft != null &&
-                    container.consultationRepository.findCompletedAfter(draft.caseJson, draft.startedAt) != null
-                ) {
-                    // v1.3.2 及更早版本在结果页退后台时可能把已完成的问诊写回草稿；
-                    // 同一病例在草稿开始之后已有完成记录，说明这是完成后的残留，启动时直接清掉。
-                    draftMutex.withLock { container.consultationDraftRepository.clear() }
-                    _uiState.update { it.copy(draft = null) }
-                } else {
-                    // finishConsultation 写入结果并由这里并发读取草稿时，不能在结束问诊后
-                    // 再把读取到的旧草稿快照写回状态，否则首页会误报存在未完成问诊。
-                    if (!draftPersistenceEnabled) return@launch
-                    _uiState.update { it.copy(draft = draft) }
+                draftMutex.withLock {
+                    val draft = withContext(Dispatchers.IO) {
+                        val saved = container.consultationDraftRepository.get()
+                        val completed = saved != null &&
+                            container.consultationRepository.findCompletedAfter(saved.caseJson, saved.startedAt) != null
+                        if (completed) container.consultationDraftRepository.clear()
+                        saved.takeUnless { completed }
+                    }
+                    _uiState.update {
+                        if (draftPersistenceEnabled && it.activeCase == null) {
+                            it.copy(draft = draft)
+                        } else {
+                            it
+                        }
+                    }
                 }
             } catch (error: kotlinx.coroutines.CancellationException) {
                 throw error
-            } catch (error: Exception) {
-                // 草稿读取失败按“没有草稿”处理即可，不应打扰用户。
-                _uiState.update { it.copy(draft = null) }
+            } catch (_: Exception) {
+                // 读取失败时保留当前内存中的草稿。
+            } finally {
+                _uiState.update { it.copy(draftLoading = false) }
             }
         }
     }
@@ -1279,28 +1591,39 @@ class AppViewModel(
     private fun observeSavedCases() {
         savedCaseJob?.cancel()
         savedCaseJob = viewModelScope.launch {
-            container.savedCaseRepository.observeAll()
+            flow { emitAll(container.savedCaseRepository.observeAll()) }
+                .map { saved ->
+                    val generated = saved.mapNotNull { entity ->
+                        if (entity.caseJson.isBlank() || BuiltInCases.byId(entity.id) != null) {
+                            null
+                        } else {
+                            runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
+                        }
+                    }
+                    saved to generated
+                }
+                .flowOn(Dispatchers.IO)
                 .catch {
                     // 收藏病例读取失败时至少保留内置病例，避免首页病例列表为空。
-                    _uiState.update { it.copy(cases = BuiltInCases.all) }
+                    _uiState.update { it.copy(cases = BuiltInCases.all, savedCases = emptyList()) }
                 }
-                .collect { saved ->
-                    val generated = saved.mapNotNull { entity ->
-                        runCatching { CaseJsonCodec.decode(entity.caseJson) }.getOrNull()
-                    }
+                .collect { (saved, generated) ->
                     _uiState.update { it.copy(cases = BuiltInCases.all + generated, savedCases = saved) }
                 }
         }
     }
 
-    fun toggleSavedCaseFavorite(caseId: String) {
+    fun setCaseFavorite(caseId: String, favorite: Boolean) {
         launchDb("更新收藏失败，请稍后重试。") {
-            val current = _uiState.value.savedCases.firstOrNull { it.id == caseId } ?: return@launchDb
-            container.savedCaseRepository.setFavorite(caseId, !current.favorite)
+            val builtInBookmark = BuiltInCases.byId(caseId)?.let {
+                SavedCaseEntity(id = it.id, caseJson = "", createdAt = System.currentTimeMillis())
+            }
+            container.savedCaseRepository.setFavorite(caseId, favorite, builtInBookmark)
         }
     }
 
     fun deleteSavedCase(caseId: String) {
+        if (BuiltInCases.byId(caseId) != null) return
         launchDb("删除病例失败，请稍后重试。") {
             container.savedCaseRepository.delete(caseId)
         }

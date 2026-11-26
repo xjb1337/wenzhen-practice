@@ -63,37 +63,5 @@ data class UpdateInfo(
         private val HEX_64 = Regex("^[a-f0-9]{64}$")
     }
 
-    fun isNewerThan(currentVersionCode: Int, currentVersionName: String): Boolean =
-        VersionComparator.isNewer(versionCode, versionName, currentVersionCode, currentVersionName)
-}
-
-object VersionComparator {
-    fun compareNames(left: String, right: String): Int {
-        val leftParts = versionParts(left)
-        val rightParts = versionParts(right)
-        val size = maxOf(leftParts.size, rightParts.size)
-        for (index in 0 until size) {
-            val leftPart = leftParts.getOrElse(index) { 0 }
-            val rightPart = rightParts.getOrElse(index) { 0 }
-            if (leftPart != rightPart) return leftPart.compareTo(rightPart)
-        }
-        return 0
-    }
-
-    fun isNewer(
-        remoteVersionCode: Int,
-        remoteVersionName: String,
-        currentVersionCode: Int,
-        currentVersionName: String,
-    ): Boolean {
-        if (remoteVersionCode != currentVersionCode) {
-            return remoteVersionCode > currentVersionCode
-        }
-        return compareNames(remoteVersionName, currentVersionName) > 0
-    }
-
-    private fun versionParts(value: String): List<Int> =
-        value.split(Regex("[^0-9]+"))
-            .filter { it.isNotEmpty() }
-            .mapNotNull { it.toIntOrNull() }
+    fun isNewerThan(currentVersionCode: Int): Boolean = versionCode > currentVersionCode
 }

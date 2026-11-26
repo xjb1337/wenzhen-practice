@@ -11,13 +11,14 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -26,12 +27,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.ChevronRight
+import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.LocalHospital
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.SearchOff
+import androidx.compose.material.icons.outlined.StarBorder
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -39,6 +40,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconToggleButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -52,9 +54,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +64,7 @@ import com.xjb.wenzhen.data.model.MedicalCase
 import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.domain.CaseGenerationSelection
+import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.DifficultyBadge
 import com.xjb.wenzhen.ui.components.EmptyState
@@ -72,9 +72,6 @@ import com.xjb.wenzhen.ui.components.LoadingState
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.BlueSoft
-import com.xjb.wenzhen.ui.theme.TealContainer
-import com.xjb.wenzhen.ui.theme.GradientStart
-import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 
@@ -84,19 +81,23 @@ private enum class CaseLibraryFilter(val label: String) {
     AI("AI 生成"),
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun CaseLibraryScreen(
     cases: List<MedicalCase>,
     selectedDepartment: String,
     hasApiKey: Boolean,
-    builtInCount: Int,
+    modifier: Modifier = Modifier,
+    canPractice: Boolean = hasApiKey,
+    offlineMode: Boolean = false,
+    onEnableOfflinePractice: () -> Unit = {},
     // 全量病例（未按科室筛选），用于筛选行补齐「仅 AI 生成」科室里已经生成的病例。
     allCases: List<MedicalCase> = cases,
     onDepartmentSelected: (String) -> Unit = {},
     onCaseSelected: (MedicalCase, PatientPersonality, EncounterType) -> Unit = { _, _, _ -> },
     savedCaseIds: Set<String> = emptySet(),
     favoriteCaseIds: Set<String> = emptySet(),
-    onToggleFavorite: (String) -> Unit = {},
+    onFavoriteChange: (String, Boolean) -> Unit = { _, _ -> },
     onDeleteSavedCase: (String) -> Unit = {},
     onGenerateCase: (CaseGenerationSelection) -> Unit = {},
     onOpenSettings: () -> Unit = {},
@@ -108,9 +109,9 @@ fun CaseLibraryScreen(
     onDiscardDraft: () -> Unit = {},
     isLoading: Boolean = false,
     loadError: String? = null,
-    modifier: Modifier = Modifier,
 ) {
     var showGenerateDialog by rememberSaveable { mutableStateOf(false) }
+    var showDiscardDraftDialog by rememberSaveable { mutableStateOf(false) }
     var personalityCaseId by rememberSaveable { mutableStateOf<String?>(null) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var libraryFilter by rememberSaveable { mutableStateOf(CaseLibraryFilter.ALL) }
@@ -134,7 +135,18 @@ fun CaseLibraryScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
-            WenzhenTopBar(title = "病例库")
+            WenzhenTopBar(
+                title = "病例库",
+                subtitle = if (offlineMode) "离线练习" else null,
+                actions = {
+                    TextButton(
+                        onClick = { showGenerateDialog = true },
+                        enabled = !isGenerating && !isLoading,
+                    ) {
+                        Text(if (isGenerating) "生成中…" else "AI 生成病例")
+                    }
+                },
+            )
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
@@ -156,30 +168,30 @@ fun CaseLibraryScreen(
             else -> LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
-                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, bottom = 28.dp),
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
+                    .imePadding(),
+                contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
-                item {
-                    PracticeHero(builtInCount = builtInCount)
-                }
                 if (draftSummary != null) {
                     item {
-                        NoticeBanner(
-                            message = "发现未完成的问诊：$draftSummary",
-                            actionLabel = "继续问诊",
-                            onAction = onResumeDraft,
-                            onDismiss = onDiscardDraft,
+                        ConsultationDraftCard(
+                            summary = draftSummary,
+                            onResume = onResumeDraft,
+                            onDiscard = { showDiscardDraftDialog = true },
                         )
                     }
                 }
-                item {
-                    AiCaseCard(
-                        hasApiKey = hasApiKey,
-                        isGenerating = isGenerating,
-                        onOpenGenerator = { showGenerateDialog = true },
-                        onOpenSettings = onOpenSettings,
-                    )
+                if (!canPractice) {
+                    item {
+                        NoticeBanner(
+                            message = "开启离线练习，即可使用内置病例。",
+                            actionLabel = "开启离线练习",
+                            onAction = onEnableOfflinePractice,
+                            isError = false,
+                        )
+                    }
                 }
                 if (generationError != null) {
                     item {
@@ -206,7 +218,7 @@ fun CaseLibraryScreen(
                                 modifier = Modifier.weight(1f),
                             )
                             Text(
-                                text = "${visibleCases.size} 例可用",
+                                text = "${visibleCases.size} 个病例",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -216,7 +228,8 @@ fun CaseLibraryScreen(
                             onValueChange = { searchQuery = it },
                             modifier = Modifier.fillMaxWidth(),
                             singleLine = true,
-                            placeholder = { Text("搜索病例标题、科室或症状…") },
+                            label = { Text("搜索病例") },
+                            placeholder = { Text("病例标题、科室或症状") },
                             leadingIcon = {
                                 Icon(Icons.Outlined.Search, contentDescription = null)
                             },
@@ -229,7 +242,7 @@ fun CaseLibraryScreen(
                             },
                             shape = RoundedCornerShape(16.dp),
                         )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             CaseLibraryFilter.entries.forEach { option ->
                                 FilterChip(
                                     selected = libraryFilter == option,
@@ -248,20 +261,31 @@ fun CaseLibraryScreen(
                 }
                 if (visibleCases.isEmpty()) {
                     item {
-                        val hasFilter = normalizedQuery.isNotEmpty() || libraryFilter != CaseLibraryFilter.ALL
+                        val hasFilter = normalizedQuery.isNotEmpty() ||
+                            libraryFilter != CaseLibraryFilter.ALL || selectedDepartment != Departments.ALL
+                        val noFavorites = libraryFilter == CaseLibraryFilter.FAVORITE && favoriteCaseIds.isEmpty()
                         EmptyState(
-                            icon = Icons.Outlined.SearchOff,
-                            title = if (hasFilter) "没有匹配的病例" else "该科室暂无病例",
-                            description = if (hasFilter) {
-                                "试试调整搜索关键词，或重置筛选条件。"
-                            } else {
-                                "切换其他科室，或使用 AI 生成一个新病例。"
+                            icon = if (noFavorites) Icons.Outlined.StarBorder else Icons.Outlined.SearchOff,
+                            title = when {
+                                noFavorites -> "还没有收藏病例"
+                                hasFilter -> "没有匹配的病例"
+                                else -> "该科室暂无病例"
                             },
-                            actionLabel = if (hasFilter) "重置筛选" else "AI 生成病例",
+                            description = when {
+                                noFavorites -> "点击病例卡片上的星标即可收藏。"
+                                hasFilter -> "试试调整搜索关键词，或重置筛选条件。"
+                                else -> "切换其他科室，或使用 AI 生成一个新病例。"
+                            },
+                            actionLabel = when {
+                                noFavorites -> "浏览病例"
+                                hasFilter -> "重置筛选"
+                                else -> "AI 生成病例"
+                            },
                             onAction = {
                                 if (hasFilter) {
                                     searchQuery = ""
                                     libraryFilter = CaseLibraryFilter.ALL
+                                    onDepartmentSelected(Departments.ALL)
                                 } else {
                                     showGenerateDialog = true
                                 }
@@ -275,7 +299,7 @@ fun CaseLibraryScreen(
                             onClick = { personalityCaseId = medicalCase.id },
                             isSaved = medicalCase.id in savedCaseIds,
                             isFavorite = medicalCase.id in favoriteCaseIds,
-                            onToggleFavorite = { onToggleFavorite(medicalCase.id) },
+                            onFavoriteChange = { favorite -> onFavoriteChange(medicalCase.id, favorite) },
                             onDelete = { pendingDeleteCaseId = medicalCase.id },
                         )
                     }
@@ -284,7 +308,7 @@ fun CaseLibraryScreen(
         }
     }
 
-    val pendingDeleteCase = cases.firstOrNull { it.id == pendingDeleteCaseId }
+    val pendingDeleteCase = cases.firstOrNull { it.id == pendingDeleteCaseId && it.id in savedCaseIds }
     if (pendingDeleteCase != null) {
         AlertDialog(
             onDismissRequest = { pendingDeleteCaseId = null },
@@ -306,10 +330,30 @@ fun CaseLibraryScreen(
         )
     }
 
+    if (showDiscardDraftDialog && draftSummary != null) {
+        AlertDialog(
+            onDismissRequest = { showDiscardDraftDialog = false },
+            title = { Text("放弃这次问诊？") },
+            text = { Text("这份草稿和其中的对话将被删除。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    showDiscardDraftDialog = false
+                    onDiscardDraft()
+                }) {
+                    Text("放弃草稿", color = MaterialTheme.colorScheme.error)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showDiscardDraftDialog = false }) { Text("保留草稿") }
+            },
+        )
+    }
+
     val personalityCase = cases.firstOrNull { it.id == personalityCaseId }
     if (personalityCase != null) {
         PersonalityPickerDialog(
             medicalCase = personalityCase,
+            replacesDraft = draftSummary != null,
             onDismiss = { personalityCaseId = null },
             onConfirm = { personality, encounterType ->
                 personalityCaseId = null
@@ -319,150 +363,40 @@ fun CaseLibraryScreen(
     }
 
     if (showGenerateDialog) {
-        GenerateCaseDialog(
-            hasApiKey = hasApiKey,
-            initialDepartment = if (selectedDepartment == Departments.ALL) {
-                Departments.CARDIOLOGY
-            } else {
-                selectedDepartment
-            },
-            isGenerating = isGenerating,
-            onDismiss = { showGenerateDialog = false },
-            onGenerate = { selection ->
-                showGenerateDialog = false
-                onGenerateCase(selection)
-            },
-            onOpenSettings = {
-                showGenerateDialog = false
-                onOpenSettings()
-            },
-        )
-    }
-}
-
-@Composable
-private fun PracticeHero(builtInCount: Int) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(26.dp))
-            .background(
-                Brush.linearGradient(
-                    colors = listOf(GradientStart, GradientEnd),
-                )
-            )
-            .padding(horizontal = 22.dp, vertical = 22.dp),
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Surface(
-                color = Color.White.copy(alpha = 0.18f),
-                shape = CircleShape,
-            ) {
-                Text(
-                    text = "临床问诊 · 刻意练习",
-                    modifier = Modifier.padding(horizontal = 11.dp, vertical = 6.dp),
-                    color = Color.White,
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-            Text(
-                text = "把每一次开口\n练成临床思维",
-                color = Color.White,
-                style = MaterialTheme.typography.headlineMedium,
-                fontWeight = FontWeight.Bold,
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(18.dp)) {
-                HeroStat(value = "$builtInCount", label = "标准病例")
-                HeroStat(value = "${Departments.all.size - 1}", label = "临床科室")
-                HeroStat(value = "AI", label = "随机扩展")
-            }
+        val unavailable = when {
+            offlineMode -> AppSettings.OFFLINE_AI_MESSAGE
+            !hasApiKey -> "请先在设置中填写 DeepSeek API Key。"
+            else -> null
         }
-    }
-}
-
-@Composable
-private fun HeroStat(value: String, label: String) {
-    Column {
-        Text(
-            text = value,
-            color = Color.White,
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold,
-        )
-        Text(
-            text = label,
-            color = Color.White.copy(alpha = 0.72f),
-            style = MaterialTheme.typography.bodySmall,
-        )
-    }
-}
-
-@Composable
-private fun AiCaseCard(
-    hasApiKey: Boolean,
-    isGenerating: Boolean,
-    onOpenGenerator: () -> Unit,
-    onOpenSettings: () -> Unit,
-) {
-    Surface(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !isGenerating, onClick = onOpenGenerator),
-        shape = RoundedCornerShape(20.dp),
-        color = TealContainer.copy(alpha = 0.58f),
-        border = BorderStroke(1.dp, TealPrimary.copy(alpha = 0.12f)),
-    ) {
-        Row(
-            modifier = Modifier.padding(16.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(13.dp),
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(15.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isGenerating) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.5.dp,
-                    )
+        if (unavailable != null) {
+            AlertDialog(
+                onDismissRequest = { showGenerateDialog = false },
+                title = { Text("AI 生成病例") },
+                text = { Text(unavailable) },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showGenerateDialog = false
+                        onOpenSettings()
+                    }) { Text("去设置") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showGenerateDialog = false }) { Text("取消") }
+                },
+            )
+        } else {
+            GenerateCaseDialog(
+                initialDepartment = if (selectedDepartment == Departments.ALL) {
+                    Departments.CARDIOLOGY
                 } else {
-                    Icon(
-                        imageVector = Icons.Outlined.AutoAwesome,
-                        contentDescription = null,
-                        tint = TealPrimary,
-                    )
-                }
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = if (isGenerating) "正在生成新病例…" else "AI 随机生成病例",
-                    style = MaterialTheme.typography.titleMedium,
-                )
-                Spacer(modifier = Modifier.height(3.dp))
-                Text(
-                    text = if (hasApiKey) {
-                        "选择科室和难度，让标准化病人换个考题"
-                    } else {
-                        "尚未配置 AI 服务，先完成设置即可使用"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            if (!hasApiKey && !isGenerating) {
-                TextButton(onClick = onOpenSettings) {
-                    Text("去设置")
-                }
-            } else {
-                Icon(
-                    imageVector = Icons.Outlined.ChevronRight,
-                    contentDescription = "生成病例",
-                    tint = TealPrimary,
-                )
-            }
+                    selectedDepartment
+                },
+                isGenerating = isGenerating,
+                onDismiss = { showGenerateDialog = false },
+                onGenerate = { selection ->
+                    showGenerateDialog = false
+                    onGenerateCase(selection)
+                },
+            )
         }
     }
 }
@@ -507,13 +441,14 @@ private fun DepartmentFilterRow(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CaseCard(
     medicalCase: MedicalCase,
     onClick: () -> Unit,
     isSaved: Boolean = false,
     isFavorite: Boolean = false,
-    onToggleFavorite: () -> Unit = {},
+    onFavoriteChange: (Boolean) -> Unit,
     onDelete: () -> Unit = {},
 ) {
     Surface(
@@ -537,7 +472,7 @@ private fun CaseCard(
                             text = medicalCase.title,
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
-                            maxLines = 1,
+                            maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
                         if (medicalCase.isAiGenerated) {
@@ -552,10 +487,7 @@ private fun CaseCard(
                         }
                     }
                     Spacer(modifier = Modifier.height(5.dp))
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(
                             text = medicalCase.department,
                             style = MaterialTheme.typography.bodySmall,
@@ -563,6 +495,13 @@ private fun CaseCard(
                         )
                         DifficultyBadge(difficulty = medicalCase.difficulty)
                     }
+                }
+                IconToggleButton(checked = isFavorite, onCheckedChange = onFavoriteChange) {
+                    Icon(
+                        imageVector = if (isFavorite) Icons.Filled.Star else Icons.Outlined.StarBorder,
+                        contentDescription = if (isFavorite) "取消收藏${medicalCase.title}" else "收藏${medicalCase.title}",
+                        tint = if (isFavorite) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 }
             }
             Spacer(modifier = Modifier.height(12.dp))
@@ -587,13 +526,8 @@ private fun CaseCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (isSaved) {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        TextButton(onClick = onToggleFavorite) {
-                            Text(if (isFavorite) "取消收藏" else "收藏")
-                        }
-                        TextButton(onClick = onDelete) {
-                            Text("删除")
-                        }
+                    TextButton(onClick = onDelete) {
+                        Text("删除")
                     }
                 }
                 Button(
@@ -615,12 +549,10 @@ private fun CaseCard(
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun GenerateCaseDialog(
-    hasApiKey: Boolean,
     initialDepartment: String,
     isGenerating: Boolean,
     onDismiss: () -> Unit,
     onGenerate: (CaseGenerationSelection) -> Unit,
-    onOpenSettings: () -> Unit,
 ) {
     val groups = CaseGenerationDepartments.groups
     var department by rememberSaveable { mutableStateOf(initialDepartment) }
@@ -766,12 +698,6 @@ private fun GenerateCaseDialog(
                         )
                     }
                 }
-                if (!hasApiKey) {
-                    NoticeBanner(
-                        message = "还没有配置 AI 服务，无法生成病例。",
-                        isError = false,
-                    )
-                }
                 if (isGenerating) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -789,23 +715,19 @@ private fun GenerateCaseDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    if (hasApiKey) {
-                        onGenerate(
-                            CaseGenerationSelection(
-                                department = department,
-                                groupLabel = groupLabel,
-                                difficulty = difficulty,
-                                personality = personality,
-                                encounterType = encounterType,
-                            ),
-                        )
-                    } else {
-                        onOpenSettings()
-                    }
+                    onGenerate(
+                        CaseGenerationSelection(
+                            department = department,
+                            groupLabel = groupLabel,
+                            difficulty = difficulty,
+                            personality = personality,
+                            encounterType = encounterType,
+                        ),
+                    )
                 },
                 enabled = !isGenerating,
             ) {
-                Text(if (hasApiKey) "生成病例" else "去设置")
+                Text("生成病例")
             }
         },
         dismissButton = {
@@ -816,11 +738,39 @@ private fun GenerateCaseDialog(
     )
 }
 
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun ConsultationDraftCard(
+    summary: String,
+    onResume: () -> Unit,
+    onDiscard: () -> Unit,
+) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text("未完成的问诊", style = MaterialTheme.typography.titleSmall)
+            Text(summary, style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(onClick = onResume) { Text("继续问诊") }
+                TextButton(onClick = onDiscard) { Text("放弃草稿") }
+            }
+        }
+    }
+}
+
 @Composable
 internal fun PersonalityPickerDialog(
     medicalCase: MedicalCase,
     onDismiss: () -> Unit,
     onConfirm: (PatientPersonality, EncounterType) -> Unit,
+    replacesDraft: Boolean = false,
 ) {
     var personality by rememberSaveable { mutableStateOf(PatientPersonality.COOPERATIVE) }
     var encounterType by rememberSaveable { mutableStateOf(EncounterType.OUTPATIENT) }
@@ -828,7 +778,20 @@ internal fun PersonalityPickerDialog(
         onDismissRequest = onDismiss,
         title = { Text("开始问诊") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(14.dp),
+            ) {
+                if (replacesDraft) {
+                    Text(
+                        "开始新问诊会替换现有草稿。",
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(MaterialTheme.colorScheme.errorContainer, RoundedCornerShape(8.dp))
+                            .padding(12.dp),
+                    )
+                }
                 Text(
                     text = "${medicalCase.title} · ${medicalCase.patientSummary}",
                     style = MaterialTheme.typography.bodyMedium,
@@ -856,7 +819,7 @@ internal fun PersonalityPickerDialog(
                 val safePersonality = if (personality.availableFor(medicalCase.patient.age)) personality else PatientPersonality.COOPERATIVE
                 onConfirm(safePersonality, encounterType)
             }) {
-                Text("开始问诊")
+                Text(if (replacesDraft) "替换草稿并开始" else "开始问诊")
             }
         },
         dismissButton = {

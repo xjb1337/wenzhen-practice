@@ -10,6 +10,8 @@ import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,17 +28,20 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.Send
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.ExpandLess
 import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Science
-import androidx.compose.material.icons.outlined.Send
 import androidx.compose.material.icons.outlined.Timer
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -60,7 +65,6 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -95,14 +99,13 @@ import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(
     medicalCase: MedicalCase,
     messages: List<ChatMessage>,
     isPatientTyping: Boolean,
-    hasApiKey: Boolean,
+    canPractice: Boolean,
     errorMessage: String?,
     onSendMessage: (String) -> Unit,
     onFinish: () -> Unit,
@@ -110,6 +113,7 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier,
+    offlineMode: Boolean = false,
     onRetryMessage: () -> Unit = {},
     onRequestClinical: (ClinicalRequestType, String) -> Unit = { _, _ -> },
     isQueryingClinical: Boolean = false,
@@ -124,9 +128,10 @@ fun ChatScreen(
     onDismissNotice: () -> Unit = {},
 ) {
     val listState = rememberLazyListState()
-    val scope = rememberCoroutineScope()
     var chatListHeight by remember { mutableIntStateOf(0) }
-    var autoFollow by remember { mutableStateOf(true) }
+    var lastMessageHeight by remember { mutableIntStateOf(0) }
+    var autoFollow by rememberSaveable { mutableStateOf(true) }
+    var isDragging by remember { mutableStateOf(false) }
     val isAtBottom by remember {
         derivedStateOf {
             val info = listState.layoutInfo
@@ -140,14 +145,20 @@ fun ChatScreen(
     LaunchedEffect(listState) {
         listState.interactionSource.interactions.collect { interaction ->
             when (interaction) {
-                is DragInteraction.Start -> autoFollow = false
-                is DragInteraction.Stop, is DragInteraction.Cancel -> autoFollow = isAtBottom
+                is DragInteraction.Start -> {
+                    isDragging = true
+                    autoFollow = false
+                }
+                is DragInteraction.Stop, is DragInteraction.Cancel -> {
+                    isDragging = false
+                    autoFollow = isAtBottom
+                }
             }
         }
     }
     // 拖拽结束后的惯性滑动可能继续把列表带回底部，到底后自动恢复跟随，避免按钮一直浮着。
-    LaunchedEffect(isAtBottom) {
-        if (isAtBottom) autoFollow = true
+    LaunchedEffect(isAtBottom, isDragging) {
+        if (isAtBottom && !isDragging) autoFollow = true
     }
     val showTyping = isPatientTyping && messages.lastOrNull()?.let {
         it.role != MessageRole.PATIENT || it.deliveryState != MessageDeliveryState.SENDING
@@ -164,14 +175,12 @@ fun ChatScreen(
             onBack()
         }
     }
-    BackHandler(enabled = isPatientTyping || isQueryingClinical) {
-        showBusyBackDialog = true
-    }
+    BackHandler(onBack = handleBack)
     if (showBusyBackDialog) {
         AlertDialog(
             onDismissRequest = { showBusyBackDialog = false },
             title = { Text("当前正在等待回复") },
-            text = { Text("提问或检查请求还在进行中，已为你自动保存草稿。确定先返回病例库吗？") },
+            text = { Text("提问或检查请求仍在进行。返回病例库后，可以从草稿继续这场问诊。") },
             confirmButton = {
                 TextButton(onClick = {
                     showBusyBackDialog = false
@@ -206,21 +215,13 @@ fun ChatScreen(
         )
     }
 
-    // 消息变化或输入法弹起/收起导致 LazyColumn 高度变化时，先定位到最后一个 item，再向下
-    // 滚到底（scrollBy 会在列表底部自动截断）。这样不依赖 WindowInsets.ime：Android 9 的
-    // adjustResize 下键盘动画期间 ime inset 可能一直是 0，只能靠布局高度变化来判断。
-    LaunchedEffect(messageCount, chatListHeight) {
-        if (messageCount > 0 && chatListHeight > 0) {
-            // 自己刚发出消息（最后一条是医生）时始终贴底；患者新增内容只在原本贴底时跟随，
-            // 用户正在上翻历史时保持当前位置，由右下角「回到最新消息」按钮手动回到底部。
-            val lastRole = messages.lastOrNull()?.role
-            if (autoFollow || lastRole == MessageRole.DOCTOR) {
-                // LazyColumn 的第 0 项是问诊提示、第 1 项是患者卡，消息从第 2 项开始，
-                // 所以最后一项的下标是 messageCount + 1（messageCount 已包含“患者正在输入”项）。
-                listState.scrollToItem(messageCount + 1)
-                listState.scrollBy(100_000f)
-                autoFollow = true
-            }
+    // 消息数不变时，流式回复换行也会增大最后一个气泡。跟随布局高度可以兼容输入法
+    // 缩放与长回复，并且只在气泡实际变高时滚动。
+    LaunchedEffect(messageCount, chatListHeight, lastMessageHeight, autoFollow, isDragging) {
+        if (autoFollow && !isDragging && messageCount > 0 && chatListHeight > 0) {
+            // 列表前两项是问诊提示和患者卡。最后一项可能是正在回复的占位。
+            listState.scrollToItem(messageCount + 1)
+            listState.scrollBy(100_000f)
         }
     }
     Scaffold(
@@ -230,7 +231,11 @@ fun ChatScreen(
         topBar = {
             WenzhenTopBar(
                 title = medicalCase.title,
-                subtitle = "${medicalCase.department} · ${medicalCase.patient.name} · ${medicalCase.patient.age}",
+                subtitle = if (offlineMode) {
+                    "${medicalCase.patient.name} · 离线练习"
+                } else {
+                    "${medicalCase.department} · ${medicalCase.patient.name} · ${medicalCase.patient.age}"
+                },
                 onBack = handleBack,
                 actions = {
                     TextButton(
@@ -271,14 +276,17 @@ fun ChatScreen(
                 ChatComposer(
                     input = input,
                     onInputChange = { input = it },
-                    enabled = hasApiKey && !isPatientTyping && !isQueryingClinical,
+                    enabled = canPractice && !isPatientTyping && !isQueryingClinical,
                     isBusy = isPatientTyping || isQueryingClinical,
-                    onSend = onSendMessage,
+                    onSend = { text ->
+                        autoFollow = true
+                        onSendMessage(text)
+                    },
                     onRequestExam = {
-                        if (hasApiKey) clinicalType = ClinicalRequestType.PHYSICAL_EXAM else onOpenSettings()
+                        if (canPractice) clinicalType = ClinicalRequestType.PHYSICAL_EXAM else onOpenSettings()
                     },
                     onRequestLab = {
-                        if (hasApiKey) clinicalType = ClinicalRequestType.LAB_OR_IMAGING else onOpenSettings()
+                        if (canPractice) clinicalType = ClinicalRequestType.LAB_OR_IMAGING else onOpenSettings()
                     },
                 )
             }
@@ -290,7 +298,7 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            if (!hasApiKey) {
+            if (!canPractice) {
                 NoticeBanner(
                     message = "尚未完成 AI 服务配置，无法获得患者回复。",
                     actionLabel = "去设置",
@@ -343,10 +351,19 @@ fun ChatScreen(
                     itemsIndexed(
                         items = messages,
                         key = { index, message -> "${message.timestamp}-${message.role}-$index" },
-                    ) { _, message ->
+                    ) { index, message ->
+                        val measurement = if (index == messages.lastIndex) {
+                            Modifier.onSizeChanged { lastMessageHeight = it.height }
+                        } else {
+                            Modifier
+                        }
                         MessageBubble(
                             message = message,
-                            onRetry = onRetryMessage,
+                            onRetry = {
+                                autoFollow = true
+                                onRetryMessage()
+                            },
+                            modifier = measurement,
                         )
                     }
                     if (showTyping || isQueryingClinical) {
@@ -359,13 +376,7 @@ fun ChatScreen(
                 }
                 if (!autoFollow && messageCount > 0) {
                     SmallFloatingActionButton(
-                        onClick = {
-                            scope.launch {
-                                listState.animateScrollToItem(messageCount + 1)
-                                listState.scrollBy(100_000f)
-                                autoFollow = true
-                            }
-                        },
+                        onClick = { autoFollow = true },
                         modifier = Modifier
                             .align(Alignment.BottomEnd)
                             .padding(end = 18.dp, bottom = 8.dp),
@@ -389,6 +400,7 @@ fun ChatScreen(
     clinicalType?.let { type ->
         ClinicalRequestDialog(
             requestType = type,
+            offlineMode = offlineMode,
             completedItems = completedClinicalItems,
             onDismiss = { clinicalType = null },
             onConfirm = { item ->
@@ -623,13 +635,14 @@ private fun PatientSummaryCard(medicalCase: MedicalCase) {
 private fun MessageBubble(
     message: ChatMessage,
     onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (message.role == MessageRole.SYSTEM) {
-        SystemResultCard(message = message)
+        SystemResultCard(message = message, modifier = modifier)
         return
     }
     val isDoctor = message.role == MessageRole.DOCTOR
-    Box(modifier = Modifier.fillMaxWidth()) {
+    Box(modifier = modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
                 .fillMaxWidth(0.84f)
@@ -687,9 +700,9 @@ private fun MessageBubble(
 }
 
 @Composable
-private fun SystemResultCard(message: ChatMessage) {
+private fun SystemResultCard(message: ChatMessage, modifier: Modifier = Modifier) {
     Surface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth(),
         shape = RoundedCornerShape(18.dp),
         color = BlueSoft,
         border = BorderStroke(1.dp, TealSecondary.copy(alpha = 0.35f)),
@@ -828,7 +841,7 @@ private fun ChatComposer(
                     modifier = Modifier.size(48.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.Outlined.Send,
+                        imageVector = Icons.AutoMirrored.Outlined.Send,
                         contentDescription = "发送",
                     )
                 }
@@ -837,9 +850,11 @@ private fun ChatComposer(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ClinicalRequestDialog(
     requestType: ClinicalRequestType,
+    offlineMode: Boolean,
     completedItems: Set<String> = emptySet(),
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit,
@@ -849,14 +864,21 @@ private fun ClinicalRequestDialog(
         onDismissRequest = onDismiss,
         title = { Text(requestType.actionLabel) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                LazyRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
-                    items(requestType.suggestions) { suggestion ->
-                        val done = suggestion in completedItems
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                    requestType.suggestions.forEach { suggestion ->
                         FilterChip(
                             selected = item == suggestion,
                             onClick = { item = suggestion },
-                            label = { Text(if (done) "✓ $suggestion" else suggestion) },
+                            label = { Text(suggestion) },
+                            leadingIcon = if (suggestion in completedItems) {
+                                { Icon(Icons.Outlined.Check, contentDescription = "已查看", modifier = Modifier.size(16.dp)) }
+                            } else {
+                                null
+                            },
                             shape = CircleShape,
                         )
                     }
@@ -885,7 +907,7 @@ private fun ClinicalRequestDialog(
                 onClick = { onConfirm(item.trim()) },
                 enabled = item.isNotBlank(),
             ) {
-                Text("生成结果")
+                Text(if (offlineMode) "查看结果" else "生成结果")
             }
         },
         dismissButton = {

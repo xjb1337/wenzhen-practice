@@ -98,4 +98,19 @@ class CoverageAnalyzerTest {
         assertFalse(includesMenstrual("30岁", "男"))
         assertFalse(includesMenstrual("年龄不详", "女"))
     }
+    @Test
+    fun `聊天提示跳过预置开场白和逗号分开的陈述`() {
+        val report = CoverageAnalyzer.analyze(
+            listOf(
+                ChatMessage(MessageRole.DOCTOR, DOCTOR_OPENING_LINE),
+                ChatMessage(MessageRole.PATIENT, "胸口疼"),
+                ChatMessage(MessageRole.DOCTOR, "您以前有高血压，疼痛在什么部位？"),
+            )
+        ).topics.associate { it.topic to it.covered }
+
+        assertFalse(report.getValue(HistoryTopic.CHIEF_COMPLAINT))
+        assertFalse(report.getValue(HistoryTopic.PAST_HISTORY))
+        assertTrue(report.getValue(HistoryTopic.PRESENT_ILLNESS))
+    }
+
 }

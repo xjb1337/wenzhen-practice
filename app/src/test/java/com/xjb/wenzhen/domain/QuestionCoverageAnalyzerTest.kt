@@ -3,6 +3,7 @@ package com.xjb.wenzhen.domain
 import com.xjb.wenzhen.data.cases.BuiltInCases
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.MedicalCase
+import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -121,6 +122,40 @@ class QuestionCoverageAnalyzerTest {
     }
 
     @Test
+    fun `同一条消息中的陈述和医嘱不算提问`() {
+        val messages = listOf(
+            doctor(DOCTOR_OPENING_LINE),
+            patient(cardio.openingLine),
+            doctor("您有高血压。吸烟应当戒掉。胸痛的性质是什么？"),
+        )
+
+        val evidence = QuestionCoverageAnalyzer.analyze(cardio, messages).associateBy { it.question }
+
+        assertFalse(evidence.getValue("高血压、糖尿病、血脂异常等病史").covered)
+        assertFalse(evidence.getValue("吸烟、饮酒等危险因素").covered)
+        assertEquals(listOf(3), evidence.getValue("胸痛的部位、性质和范围").messageIndexes)
+    }
+
+    @Test
+    fun `询问喘不上气或晕倒能匹配病例要点并保持证据编号`() {
+        val questions = listOf("发作时喘不上气吗？", "那时有没有晕倒")
+        for (question in questions) {
+            val messages = listOf(
+                doctor(DOCTOR_OPENING_LINE),
+                patient(cardio.openingLine),
+                doctor("有没有出汗？").copy(deliveryState = MessageDeliveryState.FAILED),
+                doctor(question),
+            )
+
+            val result = RuleScoreCalculator.compute(cardio, messages)
+            val point = "是否伴大汗、恶心、呼吸困难或晕厥"
+            assertTrue(result.coveredQuestions.contains(point))
+            assertFalse(result.missedQuestions.contains(point))
+            assertEquals(listOf(3), result.evidence.single { it.question == point }.messageIndexes)
+        }
+    }
+
+    @Test
     fun `口语化的具体问法仍能覆盖对应要点`() {
         val evidence = QuestionCoverageAnalyzer.analyze(
             cardio,
@@ -136,5 +171,45 @@ class QuestionCoverageAnalyzerTest {
         assertTrue(covered.contains("疼痛是否向肩部、背部或下颌放射"))
         assertTrue(covered.contains("冠心病及早发心血管病家族史"))
         assertTrue(covered.contains("发病后的一般状态和饮食睡眠"))
+    }
+
+    @Test
+    fun `同条消息内逗号前的陈述不作为另一个提问的证据`() {
+        val evidence = QuestionCoverageAnalyzer.analyze(
+            cardio,
+            listOf(doctor("您有高血压，平时要戒烟，胸痛多久了？")),
+        ).associateBy { it.question }
+        assertFalse(evidence.getValue("高血压、糖尿病、血脂异常等病史").covered)
+        assertFalse(evidence.getValue("吸烟、饮酒等危险因素").covered)
+        assertEquals(listOf(1), evidence.getValue("胸痛开始的时间、诱因和持续时间").messageIndexes)
+    }
+
+    @Test
+    fun `简短否定确认和正反问句保留原消息编号`() {
+        val messages = listOf(
+            doctor(DOCTOR_OPENING_LINE),
+            patient(cardio.openingLine),
+            doctor("最近也没喘不上气吧"),
+            doctor("抽没抽烟"),
+        )
+        val evidence = QuestionCoverageAnalyzer.analyze(cardio, messages).associateBy { it.question }
+        assertEquals(listOf(3), evidence.getValue("是否伴大汗、恶心、呼吸困难或晕厥").messageIndexes)
+        assertEquals(listOf(4), evidence.getValue("吸烟、饮酒等危险因素").messageIndexes)
+    }
+
+    @Test
+    fun `问亲属病情不计为本人病史且背痛不算放射痛`() {
+        val messages = listOf(
+            doctor("您后背疼吗？"),
+            doctor("家里人有几位？"),
+            doctor("您爸爸有高血压吗？"),
+            doctor("您背部疼吗？"),
+            doctor("疼痛会跑到左肩吗？"),
+        )
+        val evidence = QuestionCoverageAnalyzer.analyze(cardio, messages).associateBy { it.question }
+        assertEquals(listOf(5), evidence.getValue("疼痛是否向肩部、背部或下颌放射").messageIndexes)
+        assertFalse(evidence.getValue("高血压、糖尿病、血脂异常等病史").covered)
+        val family = evidence.getValue("冠心病及早发心血管病家族史")
+        assertFalse(2 in family.messageIndexes)
     }
 }

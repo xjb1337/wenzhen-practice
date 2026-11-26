@@ -16,6 +16,14 @@ data class ScoreTrendPoint(
     val createdAt: Long,
 )
 
+data class ScoreTrendSegment(
+    val firstIndex: Int,
+    val lastIndex: Int,
+    val minScore: Int,
+    val maxScore: Int,
+    val averageScore: Float,
+)
+
 data class DepartmentAverage(
     val department: String,
     val averageScore: Double,
@@ -33,9 +41,12 @@ data class StatsSummary(
     val trend: List<ScoreTrendPoint>,
     val departmentAverages: List<DepartmentAverage>,
     val topMissedQuestions: List<MissedQuestionCount>,
+    val trendSegments: List<ScoreTrendSegment> = emptyList(),
 )
 
 object StatsCalculator {
+    private const val MAX_CHART_SEGMENTS = 60
+
     fun calculate(records: List<StatsRecord>): StatsSummary {
         if (records.isEmpty()) {
             return StatsSummary(
@@ -83,7 +94,23 @@ object StatsCalculator {
             trend = trend,
             departmentAverages = departmentAverages,
             topMissedQuestions = missedQuestions,
+            trendSegments = chartSegments(trend),
         )
+    }
+
+    private fun chartSegments(points: List<ScoreTrendPoint>): List<ScoreTrendSegment> {
+        if (points.size <= MAX_CHART_SEGMENTS) return emptyList()
+        val segmentSize = points.lastIndex / MAX_CHART_SEGMENTS + 1
+        return points.chunked(segmentSize).mapIndexed { segmentIndex, items ->
+            val first = segmentIndex * segmentSize
+            ScoreTrendSegment(
+                firstIndex = first,
+                lastIndex = first + items.lastIndex,
+                minScore = items.minOf { it.score },
+                maxScore = items.maxOf { it.score },
+                averageScore = items.sumOf { it.score }.toFloat() / items.size,
+            )
+        }
     }
 
     private fun roundOneDecimal(value: Double): Double =

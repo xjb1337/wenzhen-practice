@@ -5,6 +5,12 @@ import kotlinx.coroutines.flow.Flow
 class ConsultationRepository(private val dao: ConsultationDao) {
     fun observeAll(): Flow<List<ConsultationEntity>> = dao.observeAll()
 
+    fun observeHistory(): Flow<List<ConsultationListItem>> = dao.observeHistory()
+
+    fun observeScores(): Flow<List<ConsultationScoreRow>> = dao.observeScores()
+
+    suspend fun getConversationJson(id: Long): String? = dao.getConversationJson(id)
+
     suspend fun getById(id: Long): ConsultationEntity? = dao.getById(id)
 
     suspend fun findCompletedAfter(caseJson: String, since: Long): ConsultationEntity? =
@@ -13,7 +19,7 @@ class ConsultationRepository(private val dao: ConsultationDao) {
     suspend fun save(entity: ConsultationEntity): Long = dao.insert(entity)
 
     /** 事务式恢复历史：重复记录（caseJson + createdAt 相同）会跳过。 */
-    suspend fun restoreAll(records: List<ConsultationEntity>): Int = dao.restoreAll(records)
+    suspend fun restoreAll(records: Flow<ConsultationEntity>): Int = dao.restoreAll(records)
 
     suspend fun updateScore(id: Long, scoreJson: String, totalScore: Int): Int =
         dao.updateScore(id, scoreJson, totalScore)
