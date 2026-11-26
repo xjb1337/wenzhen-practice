@@ -1,5 +1,8 @@
 package com.xjb.wenzhen.ui
 
+import androidx.activity.compose.ReportDrawnWhen
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -19,10 +22,15 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
@@ -38,12 +46,16 @@ import com.xjb.wenzhen.ui.screens.ChatScreen
 import com.xjb.wenzhen.ui.screens.FinishConsultationScreen
 import com.xjb.wenzhen.ui.screens.HistoryDetailScreen
 import com.xjb.wenzhen.ui.screens.HistoryScreen
-import com.xjb.wenzhen.ui.screens.ResultScreen
 import com.xjb.wenzhen.ui.screens.SettingsScreen
 import com.xjb.wenzhen.ui.screens.StatsScreen
 import com.xjb.wenzhen.ui.components.EmptyState
+import com.xjb.wenzhen.ui.components.LoadingState
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
 import com.xjb.wenzhen.ui.theme.TealPrimary
+import kotlinx.coroutines.launch
+
+private const val CONSULTATION_STARTED_AT = "consultationStartedAt"
+private const val RESULT_RECORD_ID = "resultRecordId"
 
 private object Routes {
     const val LIBRARY = "library"
@@ -76,26 +88,86 @@ fun WenzhenApp(viewModel: AppViewModel) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val navController = rememberNavController()
     val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
     val backStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = backStackEntry?.destination?.route
     val showBottomBar = currentRoute in bottomDestinations.map { it.route }
+    var settingsExitRequest by remember { mutableStateOf<SettingsExit?>(null) }
+    LaunchedEffect(currentRoute) {
+        if (currentRoute != Routes.SETTINGS) settingsExitRequest = null
+    }
+
+    fun exitSettings(exit: SettingsExit) {
+        settingsExitRequest = null
+        when (exit) {
+            SettingsExit.Back -> navController.popBackStack()
+            is SettingsExit.Tab -> navigateToRoot(navController, exit.route, saveCurrentState = false)
+        }
+    }
+
+    ReportDrawnWhen { uiState.settingsRead != SettingsReadState.Loading && !uiState.draftLoading }
+    when (val read = uiState.settingsRead) {
+        SettingsReadState.Loading -> {
+            Scaffold { padding ->
+                LoadingState(message = "正在读取设置…", modifier = Modifier.fillMaxSize().padding(padding))
+            }
+            return
+        }
+        is SettingsReadState.Unavailable -> if (!read.temporaryOffline) {
+            Scaffold { padding ->
+                Column(
+                    modifier = Modifier.fillMaxSize().padding(padding),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    EmptyState(
+                        icon = Icons.Outlined.Settings,
+                        title = "暂时无法读取本机设置",
+                        description = "可以重新读取，或本次使用离线练习与历史记录。",
+                        actionLabel = "重新读取",
+                        onAction = viewModel::reloadSettings,
+                    )
+                    TextButton(onClick = viewModel::continueOfflineWithoutSettings) {
+                        Text("本次离线使用")
+                    }
+                }
+            }
+            return
+        }
+        SettingsReadState.Ready -> Unit
+    }
 
     LaunchedEffect(viewModel) {
         viewModel.events.collect { event ->
             when (event) {
-                is AppEvent.ShowMessage -> snackbarHostState.showSnackbar(event.message)
-                AppEvent.OpenChat -> navController.navigate(Routes.CHAT) {
-                    launchSingleTop = true
+                is AppEvent.ShowMessage -> {
+                    snackbarScope.launch { snackbarHostState.showSnackbar(event.message) }
                 }
-                AppEvent.OpenResult -> navController.navigate(Routes.RESULT) {
-                    popUpTo(Routes.CHAT) { inclusive = true }
-                    launchSingleTop = true
+                is AppEvent.OpenChat -> {
+                    if (viewModel.uiState.value.consultationStartedAt == event.startedAt) {
+                        navController.navigate(Routes.CHAT) { launchSingleTop = true }
+                        navController.currentBackStackEntry?.savedStateHandle
+                            ?.set(CONSULTATION_STARTED_AT, event.startedAt)
+                    }
+                }
+                is AppEvent.OpenResult -> {
+                    if (viewModel.uiState.value.currentResult?.recordId == event.recordId) {
+                        navController.navigate(Routes.RESULT) {
+                            popUpTo(Routes.CHAT) { inclusive = true }
+                            launchSingleTop = true
+                        }
+                        navController.currentBackStackEntry?.savedStateHandle
+                            ?.set(RESULT_RECORD_ID, event.recordId)
+                    }
                 }
                 AppEvent.OpenSettings -> navController.navigate(Routes.SETTINGS) {
                     launchSingleTop = true
                 }
-                AppEvent.SettingsSaved -> {
-                    snackbarHostState.showSnackbar("设置已保存")
+                is AppEvent.SettingsSaved -> {
+                    if (event.exit != null && navController.currentDestination?.route == Routes.SETTINGS) {
+                        exitSettings(event.exit)
+                    }
+                    snackbarScope.launch { snackbarHostState.showSnackbar("设置已保存") }
                 }
             }
         }
@@ -112,8 +184,11 @@ fun WenzhenApp(viewModel: AppViewModel) {
                 )
             },
             confirmButton = {
-                Button(onClick = viewModel::acceptPrivacyNotice) {
-                    Text("同意并继续")
+                Button(
+                    onClick = viewModel::acceptPrivacyNotice,
+                    enabled = !uiState.acceptingPrivacyNotice,
+                ) {
+                    Text(if (uiState.acceptingPrivacyNotice) "正在保存…" else "同意并继续")
                 }
             },
         )
@@ -126,7 +201,15 @@ fun WenzhenApp(viewModel: AppViewModel) {
             if (showBottomBar) {
                 WenzhenBottomBar(
                     currentRoute = currentRoute,
-                    onNavigate = { route -> navigateToRoot(navController, route) },
+                    onNavigate = { route ->
+                        if (currentRoute == Routes.SETTINGS) {
+                            if (route != Routes.SETTINGS && !uiState.settingsFormSaving) {
+                                settingsExitRequest = SettingsExit.Tab(route)
+                            }
+                        } else {
+                            navigateToRoot(navController, route)
+                        }
+                    },
                 )
             }
         },
@@ -147,12 +230,14 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     allCases = uiState.cases,
                     selectedDepartment = uiState.selectedDepartment,
                     hasApiKey = uiState.hasApiKey,
-                    builtInCount = uiState.builtInCaseCount,
+                    canPractice = uiState.canPractice,
+                    offlineMode = uiState.offlineMode,
+                    onEnableOfflinePractice = { viewModel.setOfflineMode(true) },
                     onDepartmentSelected = viewModel::selectDepartment,
                     onCaseSelected = viewModel::openCase,
-                    savedCaseIds = uiState.savedCases.map { it.id }.toSet(),
+                    savedCaseIds = uiState.savedCases.filter { it.caseJson.isNotBlank() }.map { it.id }.toSet(),
                     favoriteCaseIds = uiState.savedCases.filter { it.favorite }.map { it.id }.toSet(),
-                    onToggleFavorite = viewModel::toggleSavedCaseFavorite,
+                    onFavoriteChange = viewModel::setCaseFavorite,
                     onDeleteSavedCase = viewModel::deleteSavedCase,
                     onGenerateCase = viewModel::generateCase,
                     onOpenSettings = {
@@ -171,6 +256,7 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onDiscardDraft = viewModel::discardDraft,
                     isGenerating = uiState.isGeneratingCase,
                     generationError = uiState.generationError,
+                    isLoading = uiState.draftLoading,
                 )
             }
             composable(Routes.HISTORY) {
@@ -186,16 +272,19 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onQueryChange = viewModel::setHistoryQuery,
                     onDeleteRecord = viewModel::deleteHistory,
                     onClearAll = viewModel::clearHistory,
+                    transfer = uiState.historyTransfer,
                     onRestore = viewModel::restoreHistory,
+                    onSaveBackup = viewModel::saveHistoryBackup,
+                    loadForExport = viewModel::loadHistoryForExport,
+                    loadDuration = viewModel::loadHistoryDuration,
                     onBrowseCases = { navigateToRoot(navController, Routes.LIBRARY) },
                 )
             }
             composable(Routes.STATS) {
+                val stats by viewModel.statsState.collectAsStateWithLifecycle()
                 StatsScreen(
-                    stats = uiState.stats,
-                    isLoading = uiState.historyLoading,
-                    errorMessage = uiState.historyError,
-                    onRetry = viewModel::retryHistory,
+                    state = stats,
+                    onRetry = viewModel::retryStats,
                     onDepartmentClick = { department ->
                         viewModel.setHistoryQuery(department)
                         navController.navigate(Routes.HISTORY) { launchSingleTop = true }
@@ -206,9 +295,15 @@ fun WenzhenApp(viewModel: AppViewModel) {
                 SettingsScreen(
                     settings = uiState.settings,
                     onSave = viewModel::saveSettings,
-                    onBack = { navController.popBackStack() },
-                    offlineMode = uiState.settings.offlineMode,
+                    isSaving = uiState.settingsFormSaving,
+                    exitRequest = settingsExitRequest,
+                    onRequestExit = { settingsExitRequest = it },
+                    onExit = ::exitSettings,
+                    offlineMode = uiState.offlineMode,
+                    offlineModeSaving = uiState.pendingOfflineMode != null,
                     onOfflineModeChange = viewModel::setOfflineMode,
+                    temporarySettings = uiState.settingsRead is SettingsReadState.Unavailable,
+                    onRetrySettings = viewModel::reloadSettings,
                     saveError = uiState.settingsSaveError,
                     onDismissError = viewModel::clearSettingsSaveError,
                     onTestConnection = viewModel::testConnection,
@@ -223,10 +318,13 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     onThemeChange = viewModel::setTheme,
                 )
             }
-            composable(Routes.CHAT) {
+            composable(Routes.CHAT) { entry ->
                 val medicalCase = uiState.activeCase
                 if (medicalCase == null) {
-                    UnavailableScreen(
+                    RestoreConsultationScreen(
+                        startedAt = entry.savedStateHandle[CONSULTATION_STARTED_AT],
+                        uiState = uiState,
+                        onRestore = viewModel::restoreConsultation,
                         title = "问诊不可用",
                         description = "当前没有进行中的病例，请返回病例库重新开始。",
                         onBack = { navController.popBackStack() },
@@ -236,11 +334,14 @@ fun WenzhenApp(viewModel: AppViewModel) {
                         medicalCase = medicalCase,
                         messages = uiState.messages,
                         isPatientTyping = uiState.isPatientTyping,
-                        hasApiKey = uiState.canPractice,
+                        canPractice = uiState.canPractice,
+                        offlineMode = uiState.offlineMode,
                         errorMessage = uiState.chatError,
                         onSendMessage = viewModel::sendMessage,
                         onFinish = {
                             navController.navigate(Routes.FINISH) { launchSingleTop = true }
+                            navController.currentBackStackEntry?.savedStateHandle
+                                ?.set(CONSULTATION_STARTED_AT, uiState.consultationStartedAt)
                         },
                         onBack = {
                             viewModel.flushDraft()
@@ -264,10 +365,13 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     )
                 }
             }
-            composable(Routes.FINISH) {
+            composable(Routes.FINISH) { entry ->
                 val medicalCase = uiState.activeCase
                 if (medicalCase == null) {
-                    UnavailableScreen(
+                    RestoreConsultationScreen(
+                        startedAt = entry.savedStateHandle[CONSULTATION_STARTED_AT],
+                        uiState = uiState,
+                        onRestore = viewModel::restoreConsultation,
                         title = "无法结束问诊",
                         description = "当前病例已不可用，请返回病例库重新开始。",
                         onBack = { navController.popBackStack() },
@@ -290,71 +394,62 @@ fun WenzhenApp(viewModel: AppViewModel) {
                     )
                 }
             }
-            composable(Routes.RESULT) {
-                val result = uiState.currentResult
-                if (result == null) {
+            composable(Routes.RESULT) { entry ->
+                val recordId: Long? = entry.savedStateHandle[RESULT_RECORD_ID]
+                val liveResult = uiState.currentResult?.takeIf { recordId == null || it.recordId == recordId }
+                if (liveResult == null && recordId == null) {
                     UnavailableScreen(
                         title = "结果暂不可用",
-                        description = "本次问诊结果没有找到，请到历史记录中查看已保存的内容。",
-                        onBack = {
-                            navController.navigate(Routes.LIBRARY) {
-                                popUpTo(Routes.LIBRARY) { inclusive = false }
-                                launchSingleTop = true
-                            }
-                        },
+                        description = "可到历史记录中查看已保存的问诊结果。",
+                        onBack = { navController.popBackStack() },
                     )
                 } else {
-                    ResultScreen(
-                        caseTitle = result.caseTitle,
-                        patientName = result.patientName,
-                        department = result.department,
-                        difficulty = result.difficulty,
-                        createdAt = result.createdAt,
-                        medicalRecord = result.medicalRecord,
-                        score = result.score,
-                        initialDiagnosis = result.initialDiagnosis,
-                        diagnosisBasis = result.diagnosisBasis,
-                        treatmentAnswer = result.treatmentAnswer,
-                        messages = result.messages,
-                        referenceCarePlan = result.referenceCarePlan,
-                        notice = result.notice,
-                        isAiGenerated = result.isAiGeneratedCase,
+                    ConsultationResult(
+                        recordId = recordId ?: liveResult?.recordId,
+                        liveResult = liveResult,
+                        uiState = uiState,
+                        viewModel = viewModel,
                         onBack = { navController.popBackStack() },
-                        onRegenerateAiComment = if (result.recordId > 0L) {
-                            { viewModel.regenerateAiComment(result.recordId) }
-                        } else {
-                            null
-                        },
-                        isRegeneratingAiComment = uiState.regeneratingCommentId == result.recordId,
                     )
                 }
             }
             composable(Routes.HISTORY_DETAIL) { entry ->
                 val recordId = entry.arguments?.getString("recordId")?.toLongOrNull()
-                LaunchedEffect(recordId) {
-                    if (recordId != null) {
-                        viewModel.loadHistoryDetail(recordId)
-                    }
-                }
-                val visibleRecord = uiState.historyDetail
-                    ?.takeIf { it.recordId == recordId }
-                HistoryDetailScreen(
-                    record = visibleRecord,
-                    isLoading = uiState.historyDetailLoading,
-                    errorMessage = uiState.historyDetailError,
-                    onRetry = {
-                        if (recordId != null) viewModel.loadHistoryDetail(recordId)
-                    },
+                ConsultationResult(
+                    recordId = recordId,
+                    uiState = uiState,
+                    viewModel = viewModel,
                     onBack = { navController.popBackStack() },
-                    onRegenerateAiComment = visibleRecord?.let { record ->
-                        { viewModel.regenerateAiComment(record.recordId) }
-                    },
-                    isRegeneratingAiComment = visibleRecord != null &&
-                        uiState.regeneratingCommentId == visibleRecord.recordId,
                 )
             }
         }
     }
+}
+
+@Composable
+private fun ConsultationResult(
+    recordId: Long?,
+    uiState: AppUiState,
+    viewModel: AppViewModel,
+    onBack: () -> Unit,
+    liveResult: ResultViewData? = null,
+) {
+    LaunchedEffect(recordId, liveResult == null) {
+        if (recordId != null && liveResult == null) viewModel.loadHistoryDetail(recordId)
+    }
+
+    val record = liveResult ?: uiState.historyDetail?.takeIf { it.recordId == recordId }
+    HistoryDetailScreen(
+        record = record,
+        isLoading = uiState.historyDetailLoading,
+        errorMessage = uiState.historyDetailError,
+        onRetry = { if (recordId != null) viewModel.loadHistoryDetail(recordId) },
+        onBack = onBack,
+        onRegenerateAiComment = record?.takeIf { it.recordId > 0L }?.let {
+            { viewModel.regenerateAiComment(it.recordId) }
+        },
+        isRegeneratingAiComment = record != null && uiState.regeneratingCommentId == record.recordId,
+    )
 }
 
 @Composable
@@ -388,6 +483,30 @@ private fun WenzhenBottomBar(
 }
 
 @Composable
+private fun RestoreConsultationScreen(
+    startedAt: Long?,
+    uiState: AppUiState,
+    onRestore: (Long) -> Unit,
+    title: String,
+    description: String,
+    onBack: () -> Unit,
+) {
+    val canRestore = startedAt != null && uiState.draft?.startedAt == startedAt
+    var attempted by remember(startedAt) { mutableStateOf(false) }
+    LaunchedEffect(startedAt, uiState.draftLoading, canRestore) {
+        if (!uiState.draftLoading && canRestore && startedAt != null && !attempted) {
+            onRestore(startedAt)
+            attempted = true
+        }
+    }
+    if (startedAt != null && (uiState.draftLoading || (canRestore && !attempted))) {
+        LoadingState(message = "正在恢复问诊…", modifier = Modifier.fillMaxSize())
+    } else {
+        UnavailableScreen(title, description, onBack)
+    }
+}
+
+@Composable
 private fun UnavailableScreen(
     title: String,
     description: String,
@@ -410,10 +529,10 @@ private fun UnavailableScreen(
     }
 }
 
-private fun navigateToRoot(navController: NavHostController, route: String) {
+private fun navigateToRoot(navController: NavHostController, route: String, saveCurrentState: Boolean = true) {
     navController.navigate(route) {
         popUpTo(navController.graph.findStartDestination().id) {
-            saveState = true
+            saveState = saveCurrentState
         }
         launchSingleTop = true
         restoreState = true

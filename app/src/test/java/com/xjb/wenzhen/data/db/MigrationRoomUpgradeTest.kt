@@ -124,6 +124,39 @@ class MigrationRoomUpgradeTest {
         }
     }
 
+    @Test
+    fun `升级v5保留既有草稿和收藏病例并建立历史索引`() {
+        createVersion4Database()
+        SQLiteDatabase.openDatabase(context.getDatabasePath(DB_NAME).path, null, SQLiteDatabase.OPEN_READWRITE).use { db ->
+            db.execSQL(AppDatabase.MIGRATION_4_5_SQL)
+            db.execSQL("INSERT INTO saved_cases VALUES ('ai-legacy', '{}', 500, 1)")
+            db.execSQL(
+                "INSERT INTO consultation_drafts VALUES (1, '{}', '[]', 'COOPERATIVE', 'OUTPATIENT', 400, 401)",
+            )
+            db.version = 5
+        }
+
+        val room = buildRoomDatabase()
+        try {
+            val db = room.openHelper.writableDatabase
+            assertEquals(6, db.version)
+            assertCreatedAtIndexExists(db)
+            db.query("SELECT id, createdAt, favorite FROM saved_cases").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("ai-legacy", cursor.getString(0))
+                assertEquals(500L, cursor.getLong(1))
+                assertEquals(1, cursor.getInt(2))
+            }
+            db.query("SELECT startedAt, updatedAt FROM consultation_drafts").use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(400L, cursor.getLong(0))
+                assertEquals(401L, cursor.getLong(1))
+            }
+        } finally {
+            room.close()
+        }
+    }
+
     private fun buildRoomDatabase(): AppDatabase =
         Room.databaseBuilder(context, AppDatabase::class.java, DB_NAME)
             .addMigrations(

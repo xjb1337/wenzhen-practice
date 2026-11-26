@@ -2,7 +2,7 @@
 
 一个面向中国医学生的原生 Android 问诊训练应用。使用 Kotlin、Jetpack Compose 与 Material3 构建，包名为 `com.xjb.wenzhen`。应用通过标准化病人病例模拟问诊，在结束对话后生成规范大病历并提供结构化点评。
 
-当前版本为 v1.3.9，`versionCode` 为 15。
+当前版本为 v1.4.0，`versionCode` 为 16。
 
 ## 功能
 
@@ -15,26 +15,28 @@
 - **失败重试**：医生消息发送失败后可在原对话中点击「重试」，无需重新开始问诊。
 - **病例库筛选与 AI 生成**：支持按全部科室筛选并展示加载、空列表和错误状态；可选择科室、难度和患者性格，让 DeepSeek 生成同结构的 JSON 病例。生成对话框按 8 个系统分组提供 54 个可选科室（内置 30 + 仅 AI 生成 24，如肝胆外科、重症医学科、核医学科、遗传咨询科等），每个科室附带症候提示注入提示词以提升生成质量；AI 专属科室不占用内置病例筛选行，只有真正生成过病例才补进筛选 chip。
 - **结束问诊**：填写初步诊断、诊断依据和治疗方案后，可同时生成门诊/住院病历与评分；关闭“生成病历”只跳过病历生成，评分与参考诊疗方案仍会给出。学生治疗内容以本人填写为准，门诊写入“处理意见”、住院写入“诊疗计划”，未填写时写“未填写”。
-- **结果页**：包含「病历」和「点评」两个 Tab，展示总分、分项、已覆盖要点、遗漏问题、优点、改进建议，并按门诊/住院场景展示病例级的正确诊疗方案，包括正确诊断、诊断依据、必要检查与结果、治疗/用药、注意事项与随访；支持复制与系统分享。
+- **结果页**：按内容提供「病历」「点评」「对话」。可点击问诊覆盖和诊断依据中的编号回到原对话。每条可与本次已取得的病史或检查结果及病例资料核对的诊断依据计 2 分，最多 4 分。结果也提供门诊或住院的参考诊疗方案，支持复制与系统分享。
+- **病例收藏**：内置病例和 AI 生成病例均可在病例卡片上点星标收藏，在病例库的「收藏」筛选中查看。
 - **成绩统计**：历史成绩趋势、各科室平均分、最常遗漏问诊要点 Top 10；统计由纯函数 `StatsCalculator` 计算，并可从底部导航进入。
 - **设置页引导**：可折叠展示获取 DeepSeek API Key 的完整步骤，并提供打开 `platform.deepseek.com` 的按钮。
 - **测试连接**：保存 Key 后可发送 `max_tokens=1` 的最小请求，区分成功、401/403 Key 无效、402 余额不足、429 限流、网络错误、超时和服务端异常等中文提示。
 - **应用内更新**：从 GitHub Releases 的 `update.json` 检查版本，展示更新说明；下载 APK 后校验 SHA-256 与签名证书，再通过 FileProvider 和系统安装器安装。未授权未知来源时会跳转系统设置。
-- **历史记录**：使用 Room 保存病例、性格、对话、病历、评分和时间；历史列表可进入详情回看。
-- **问诊草稿与离线训练**：问诊过程会自动保存草稿；问诊完成进入结果页后立即清除草稿，启动时还会清理「已有完成记录」的旧版本残留草稿；可在设置中开启离线基础训练，使用内置病例和本地规则完成无 API Key 练习。
-- **本地设置**：保存 DeepSeek API Key、模型、Base URL、思考强度、默认病历生成开关和外观主题。默认模型为 `deepseek-flash`，旧 `deepseek-v4-flash` 会自动迁移；也可选择 `deepseek-v4-pro` 或填写自定义模型名。
+- **历史记录**：使用 Room 保存病例、性格、对话、病历、评分和时间。可进入历史详情回看，也可通过系统文件选择器保存或恢复 JSON 备份。
+- **问诊草稿与离线训练**：问诊过程自动保存草稿，提交成功后清理草稿。可从病例库或设置开启离线练习，使用本地病例和规则评分。离线患者会按选定的性格回答，例如隐瞒型患者会在追问后提供相关病史。离线查体和检查仅展示病例中有记录的对应条目。
+- **本地设置**：保存 DeepSeek API Key、模型、思考强度、默认病历生成开关和外观主题。设置页连接 DeepSeek 官方接口，可选择 `deepseek-flash` 或 `deepseek-v4-pro`。旧 `deepseek-v4-flash` 会自动迁移。
 - **多配色主题**：设置页「外观主题」以迷你聊天页预览卡展示诊室青（默认）、临床蓝、暖杏、竹青、胭脂 5 套配色，每张卡同时预览浅色/深色两套色板、深浅跟随系统自动切换；选择后立即生效并持久化在本机。评分星标、科室标识、难度徽章等语义色固定，不随主题漂移。
 
 ## 数据库迁移
 
-Room 数据库已升级至 v5，按 `MIGRATION_1_2` → `MIGRATION_2_3` → `MIGRATION_3_4` → `MIGRATION_4_5` 增量迁移，未使用 `fallbackToDestructiveMigration`，已有历史记录会保留。
+Room 数据库当前版本为 v6。增量迁移会保留已有历史记录。
 
 - `MIGRATION_1_2` 新增 `patientPersonality`（`TEXT NOT NULL DEFAULT 'COOPERATIVE'`）。
 - `MIGRATION_2_3` 新增 `encounterType`、`treatmentAnswer`、`recordType`，三者均带默认值。
 - `MIGRATION_3_4` 新增 `consultation_drafts` 表，用于问诊草稿恢复。
-- `MIGRATION_4_5` 新增 `saved_cases` 表，用于病例收藏；建表 SQL 与 `SavedCaseEntity` / 导出的 `5.json` 保持一致（`favorite INTEGER NOT NULL`，不额外声明 DEFAULT）。
+- `MIGRATION_4_5` 新增 `saved_cases` 表，用于保存生成病例和收藏状态。
+- `MIGRATION_5_6` 为历史记录的创建时间添加索引，用于备份恢复时快速去重。
 
-`MigrationRoomUpgradeTest` 会用真实 `Room.databaseBuilder` 打开 v4 数据库并触发 `onUpgrade`，验证迁移后的 schema 校验、旧记录保留与 `saved_cases` 读写。
+`MigrationRoomUpgradeTest` 使用 `Room.databaseBuilder` 验证 v1 和 v4 数据库升级到 v6，检查数据保留和迁移后的表结构。
 
 ## 应用内更新
 
@@ -44,7 +46,7 @@ Room 数据库已升级至 v5，按 `MIGRATION_1_2` → `MIGRATION_2_3` → `MIG
 https://github.com/xjb1337/wenzhen-practice/releases/latest/download/update.json
 ```
 
-清单字段为 `versionName`、`versionCode`、`apkUrl`、`sha256`、`signingCertSha256`、`notes`、`minSdk`。版本比较使用纯函数 `VersionComparator`：优先比较 `versionCode`，相同时再逐段比较版本名。
+清单字段为 `versionName`、`versionCode`、`apkUrl`、`sha256`、`signingCertSha256`、`notes`、`minSdk`。应用只提示安装 `versionCode` 高于本机的更新，`versionName` 用于展示。
 
 发布工作流 `.github/workflows/release.yml` 会在构建签名 APK 后生成并上传 `dist/update.json`，其中 `apkUrl` 指向：
 

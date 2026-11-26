@@ -1,6 +1,5 @@
 package com.xjb.wenzhen.ui.screens
 
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -27,8 +26,12 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -41,7 +44,9 @@ import androidx.compose.ui.unit.dp
 import com.xjb.wenzhen.domain.DepartmentAverage
 import com.xjb.wenzhen.domain.MissedQuestionCount
 import com.xjb.wenzhen.domain.ScoreTrendPoint
+import com.xjb.wenzhen.domain.ScoreTrendSegment
 import com.xjb.wenzhen.domain.StatsSummary
+import com.xjb.wenzhen.ui.StatsUiState
 import com.xjb.wenzhen.ui.components.EmptyState
 import com.xjb.wenzhen.ui.components.LoadingState
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
@@ -54,10 +59,8 @@ import com.xjb.wenzhen.ui.theme.TealSecondary
 
 @Composable
 fun StatsScreen(
-    stats: StatsSummary,
+    state: StatsUiState,
     modifier: Modifier = Modifier,
-    isLoading: Boolean = false,
-    errorMessage: String? = null,
     onRetry: () -> Unit = {},
     onDepartmentClick: (String) -> Unit = {},
 ) {
@@ -68,24 +71,24 @@ fun StatsScreen(
         },
         containerColor = MaterialTheme.colorScheme.background,
     ) { innerPadding ->
-        when {
-            isLoading -> LoadingState(
+        when (state) {
+            StatsUiState.Loading -> LoadingState(
                 message = "正在整理成绩…",
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
             )
-            errorMessage != null -> EmptyState(
+            is StatsUiState.Failed -> EmptyState(
                 icon = Icons.Outlined.BarChart,
                 title = "统计加载失败",
-                description = errorMessage,
+                description = state.message,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
                 actionLabel = "重新加载",
                 onAction = onRetry,
             )
-            stats.attempts == 0 -> EmptyState(
+            is StatsUiState.Ready -> if (state.summary.attempts == 0) EmptyState(
                 icon = Icons.Outlined.BarChart,
                 title = "还没有可统计的成绩",
                 description = "完成至少一次问诊后，这里会显示成绩趋势、科室均分和常遗漏要点。",
@@ -93,15 +96,16 @@ fun StatsScreen(
                     .fillMaxSize()
                     .padding(innerPadding),
             )
-            else -> LazyColumn(
+            else LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(innerPadding),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                val stats = state.summary
                 item { StatsHero(stats = stats) }
-                item { ScoreTrendCard(points = stats.trend) }
+                item { ScoreTrendCard(points = stats.trend, segments = stats.trendSegments) }
                 item { DepartmentAverageCard(items = stats.departmentAverages, onDepartmentClick = onDepartmentClick) }
                 item { MissedQuestionsCard(items = stats.topMissedQuestions) }
             }
@@ -187,9 +191,16 @@ private fun HeroMetric(
 }
 
 @Composable
-private fun ScoreTrendCard(points: List<ScoreTrendPoint>) {
+private fun ScoreTrendCard(points: List<ScoreTrendPoint>, segments: List<ScoreTrendSegment>) {
     StatsCard(title = "历史成绩趋势", subtitle = "近 ${points.size} 次") {
-        ScoreTrendChart(points = points)
+        ScoreTrendChart(points = points, segments = segments)
+        if (segments.isNotEmpty()) {
+            Text(
+                text = "折线为分段均分，阴影为各段分数范围",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (points.isNotEmpty()) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -212,56 +223,88 @@ private fun ScoreTrendCard(points: List<ScoreTrendPoint>) {
 }
 
 @Composable
-private fun ScoreTrendChart(points: List<ScoreTrendPoint>) {
+private fun ScoreTrendChart(points: List<ScoreTrendPoint>, segments: List<ScoreTrendSegment>) {
+    if (points.isEmpty()) return
     val lineColor = TealPrimary
     val gridColor = MaterialTheme.colorScheme.outlineVariant
     val dotColor = TealSecondary
-    Canvas(
+    val dotBorder = MaterialTheme.colorScheme.surface
+    val description = remember(points) {
+        "近 ${points.size} 次成绩趋势，首次 ${points.first().score} 分，" +
+            "最低 ${points.minOf { it.score }} 分，最高 ${points.maxOf { it.score }} 分，" +
+            "最新 ${points.last().score} 分"
+    }
+    Spacer(
         modifier = Modifier
             .fillMaxWidth()
-            .height(158.dp),
-    ) {
-        if (points.isEmpty()) return@Canvas
-        val left = 8.dp.toPx()
-        val right = size.width - 8.dp.toPx()
-        val top = 10.dp.toPx()
-        val bottom = size.height - 12.dp.toPx()
-        val chartHeight = bottom - top
-        repeat(4) { index ->
-            val y = top + chartHeight * index / 3f
-            drawLine(
-                color = gridColor.copy(alpha = 0.7f),
-                start = Offset(left, y),
-                end = Offset(right, y),
-                strokeWidth = 1.dp.toPx(),
-            )
-        }
-        val denominator = (points.size - 1).coerceAtLeast(1)
-        val offsets = points.mapIndexed { index, point ->
-            val x = if (points.size == 1) {
-                (left + right) / 2f
-            } else {
-                left + (right - left) * index / denominator
-            }
-            val y = bottom - chartHeight * point.score.coerceIn(0, 100) / 100f
-            Offset(x, y)
-        }
-        if (offsets.size > 1) {
-            val path = Path().apply {
-                moveTo(offsets.first().x, offsets.first().y)
-                offsets.drop(1).forEach { offset -> lineTo(offset.x, offset.y) }
-            }
-            drawPath(
-                path = path,
-                color = lineColor,
-                style = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round),
-            )
-        }
-        offsets.forEach { offset ->
-            drawCircle(color = Color.White, radius = 5.dp.toPx(), center = offset)
-            drawCircle(color = dotColor, radius = 3.dp.toPx(), center = offset)
-        }
-    }
+            .height(158.dp)
+            .semantics { contentDescription = description }
+            .drawWithCache {
+                val left = 8.dp.toPx()
+                val right = size.width - 8.dp.toPx()
+                val top = 10.dp.toPx()
+                val bottom = size.height - 12.dp.toPx()
+                val height = bottom - top
+                val step = (right - left) / points.lastIndex.coerceAtLeast(1)
+                fun x(index: Float) = if (points.size == 1) size.width / 2f else left + step * index
+                fun y(score: Float) = bottom - height * score / 100f
+                fun offset(index: Int, point: ScoreTrendPoint) = Offset(x(index.toFloat()), y(point.score.toFloat()))
+
+                val range = Path()
+                val line = Path()
+                if (segments.isEmpty()) {
+                    points.forEachIndexed { index, point ->
+                        val position = offset(index, point)
+                        if (index == 0) line.moveTo(position.x, position.y) else line.lineTo(position.x, position.y)
+                    }
+                } else {
+                    fun startX(segment: ScoreTrendSegment) = x((segment.firstIndex - 0.5f).coerceAtLeast(0f))
+                    fun endX(segment: ScoreTrendSegment) = x((segment.lastIndex + 0.5f).coerceAtMost(points.lastIndex.toFloat()))
+                    range.moveTo(left, y(segments.first().maxScore.toFloat()))
+                    segments.forEach { segment ->
+                        val upper = y(segment.maxScore.toFloat())
+                        range.lineTo(startX(segment), upper)
+                        range.lineTo(endX(segment), upper)
+                    }
+                    segments.asReversed().forEach { segment ->
+                        val lower = y(segment.minScore.toFloat())
+                        range.lineTo(endX(segment), lower)
+                        range.lineTo(startX(segment), lower)
+                    }
+                    range.close()
+
+                    line.moveTo(left, y(segments.first().averageScore))
+                    segments.forEach { segment ->
+                        val middle = (segment.firstIndex + segment.lastIndex) / 2f
+                        line.lineTo(x(middle), y(segment.averageScore))
+                    }
+                    line.lineTo(right, y(segments.last().averageScore))
+                }
+                val marks = if (segments.isEmpty() && step >= 14.dp.toPx()) {
+                    points.mapIndexed(::offset)
+                } else {
+                    listOf(offset(points.lastIndex, points.last()))
+                }
+                val lineStroke = Stroke(width = 3.dp.toPx(), cap = StrokeCap.Round)
+                onDrawBehind {
+                    repeat(4) { index ->
+                        val y = top + height * index / 3f
+                        drawLine(
+                            color = gridColor.copy(alpha = 0.7f),
+                            start = Offset(left, y),
+                            end = Offset(right, y),
+                            strokeWidth = 1.dp.toPx(),
+                        )
+                    }
+                    drawPath(path = range, color = lineColor.copy(alpha = 0.22f))
+                    drawPath(path = line, color = lineColor, style = lineStroke)
+                    marks.forEach { mark ->
+                        drawCircle(color = dotBorder, radius = 5.dp.toPx(), center = mark)
+                        drawCircle(color = dotColor, radius = 3.dp.toPx(), center = mark)
+                    }
+                }
+            },
+    )
 }
 
 @Composable

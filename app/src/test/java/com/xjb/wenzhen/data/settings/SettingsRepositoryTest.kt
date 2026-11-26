@@ -59,6 +59,47 @@ class SettingsRepositoryTest {
     }
 
     @Test
+    fun `旧自定义接口的凭据留在原存储且不会用于官方接口`() {
+        prefs.edit()
+            .putString("deepseek_api_key", "synthetic-custom-key")
+            .putString("deepseek_base_url", "https://custom.example.invalid/v1")
+            .putString("deepseek_model", "custom-model")
+            .commit()
+
+        val migrated = repository.load()
+        assertFalse(migrated.hasApiKey)
+        assertTrue(migrated.legacyEndpointNeedsKey)
+        assertEquals(AppSettings.DEFAULT_BASE_URL, migrated.baseUrl)
+        assertEquals(AppSettings.MODEL_FLASH, migrated.model)
+
+        repository.save(migrated.copy(offlineMode = true, privacyAccepted = true))
+        assertEquals("synthetic-custom-key", prefs.getString("deepseek_api_key", null))
+        assertEquals("https://custom.example.invalid/v1", prefs.getString("deepseek_base_url", null))
+        assertTrue(repository.load().offlineMode)
+
+        repository.save(migrated.copy(apiKey = "synthetic-new-official-key"))
+        val reloaded = repository.load()
+        assertEquals("synthetic-new-official-key", reloaded.apiKey)
+        assertFalse(reloaded.legacyEndpointNeedsKey)
+        assertEquals(AppSettings.DEFAULT_BASE_URL, prefs.getString("deepseek_base_url", null))
+    }
+
+    @Test
+    fun `官方接口旧别名保留已保存的凭据`() {
+        prefs.edit()
+            .putString("deepseek_api_key", "synthetic-official-key")
+            .putString("deepseek_base_url", "https://api.deepseek.com:443/v1/")
+            .putString("deepseek_model", "deepseek-v4-pro")
+            .commit()
+
+        val restored = repository.load()
+        assertEquals("synthetic-official-key", restored.apiKey)
+        assertEquals(AppSettings.DEFAULT_BASE_URL, restored.baseUrl)
+        assertEquals(AppSettings.MODEL_PRO, restored.model)
+        assertFalse(restored.legacyEndpointNeedsKey)
+    }
+
+    @Test
     fun `保存设置会清除遗留中转字段`() {
         prefs.edit()
             .putString("api_source", "BUILTIN")

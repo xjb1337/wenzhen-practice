@@ -252,6 +252,7 @@ object ScoreReconciler {
                 missedQuestions = rule.missedQuestions.distinct(),
                 improvements = (score.improvements + rule.notes).distinct(),
                 evidence = rule.evidence,
+                diagnosisClues = rule.diagnosisClues,
                 isLegacy = false,
             )
         }
@@ -284,7 +285,7 @@ object ScoreReconciler {
     }
 
     /**
-     * 校验模型给出的证据编号：编号必须指向 [PromptBuilder.formatTranscript] 里真实存在的非系统条目，
+     * 校验模型给出的证据编号：编号必须指向评分转写中真实存在的学生发言，
      * 全部编号无效时丢弃该条覆盖点，部分无效时仅去掉无效编号，避免“引用编号不存在”被当作有效证据。
      */
     private fun sanitizeReference(point: String, messages: List<ChatMessage>): String? {
@@ -294,8 +295,7 @@ object ScoreReconciler {
         val valid = refs.filter { match ->
             val index = match.groupValues[1].toIntOrNull() ?: return@filter false
             index in 1..transcript.size &&
-                transcript[index - 1].role != MessageRole.SYSTEM &&
-                !isScriptedOpening(index - 1, transcript[index - 1])
+                isDoctorEvidence(index - 1, transcript[index - 1])
         }
         if (valid.isEmpty()) return null
         var cleaned = point

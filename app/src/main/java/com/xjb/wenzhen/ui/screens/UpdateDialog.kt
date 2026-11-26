@@ -94,8 +94,8 @@ fun UpdateDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !downloading) {
-                Text("稍后")
+            TextButton(onClick = onDismiss) {
+                Text(if (downloading) "取消下载" else "稍后")
             }
         },
     )

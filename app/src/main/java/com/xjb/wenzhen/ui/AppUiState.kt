@@ -2,7 +2,7 @@ package com.xjb.wenzhen.ui
 
 import com.xjb.wenzhen.BuildConfig
 import com.xjb.wenzhen.data.cases.BuiltInCases
-import com.xjb.wenzhen.data.db.ConsultationEntity
+import com.xjb.wenzhen.data.db.ConsultationListItem
 import com.xjb.wenzhen.data.db.ConsultationDraftEntity
 import com.xjb.wenzhen.data.db.SavedCaseEntity
 import com.xjb.wenzhen.data.model.ChatMessage
@@ -12,9 +12,6 @@ import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.EncounterType
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.domain.ScoreResult
-import com.xjb.wenzhen.domain.ScoreParser
-import com.xjb.wenzhen.domain.StatsCalculator
-import com.xjb.wenzhen.domain.StatsRecord
 import com.xjb.wenzhen.domain.StatsSummary
 import com.xjb.wenzhen.domain.ReferenceCarePlan
 
@@ -26,7 +23,7 @@ data class ResultViewData(
     val difficulty: String,
     val createdAt: Long,
     val medicalRecord: String,
-    val score: ScoreResult,
+    val score: ScoreResult?,
     val initialDiagnosis: String,
     val diagnosisBasis: String = "",
     val treatmentAnswer: String = "",
@@ -35,6 +32,7 @@ data class ResultViewData(
     val referenceCarePlan: ReferenceCarePlan? = null,
     val notice: String? = null,
     val isAiGeneratedCase: Boolean = false,
+    val savedTotalScore: Int? = score?.totalScore,
 )
 
 data class AppUiState(
@@ -44,7 +42,9 @@ data class AppUiState(
     val savedCases: List<SavedCaseEntity> = emptyList(),
     val selectedDepartment: String = Departments.ALL,
     val settings: AppSettings = AppSettings(),
+    val settingsRead: SettingsReadState = SettingsReadState.Ready,
     val draft: ConsultationDraftEntity? = null,
+    val draftLoading: Boolean = true,
     val activeCase: MedicalCase? = null,
     val patientPersonality: PatientPersonality = PatientPersonality.COOPERATIVE,
     val encounterType: EncounterType = EncounterType.OUTPATIENT,
@@ -63,14 +63,18 @@ data class AppUiState(
     val currentResult: ResultViewData? = null,
     /** 正在重新生成 AI 点评的历史记录 id；为 null 表示没有进行中的请求。 */
     val regeneratingCommentId: Long? = null,
-    val history: List<ConsultationEntity> = emptyList(),
+    val history: List<ConsultationListItem> = emptyList(),
     val historyQuery: String = "",
     val historyLoading: Boolean = true,
+    val historyTransfer: HistoryTransfer? = null,
     val historyError: String? = null,
     val historyDetail: ResultViewData? = null,
     val historyDetailLoading: Boolean = false,
     val historyDetailError: String? = null,
     val settingsSaveError: String? = null,
+    val settingsFormSaving: Boolean = false,
+    val pendingOfflineMode: Boolean? = null,
+    val acceptingPrivacyNotice: Boolean = false,
     val connectionTest: ConnectionTestUiState = ConnectionTestUiState(),
     val updateState: UpdateUiState = UpdateUiState.Idle,
 ) {
@@ -87,35 +91,11 @@ data class AppUiState(
     val aiSetupMessage: String
         get() = settings.aiSetupMessage
 
+    val offlineMode: Boolean
+        get() = settings.offlineMode || pendingOfflineMode == true
+
     val canPractice: Boolean
-        get() = hasApiKey || settings.offlineMode
-
-    val builtInCaseCount: Int
-        get() = BuiltInCases.all.size
-
-    val stats: StatsSummary by lazy {
-        StatsCalculator.calculate(
-            history.map { entity ->
-                val score = runCatching { ScoreParser.parse(entity.scoreJson) }.getOrNull()
-                StatsRecord(
-                    id = entity.id,
-                    department = entity.department,
-                    totalScore = score?.totalScore ?: entity.totalScore,
-                    createdAt = entity.createdAt,
-                    missedQuestions = score?.missedQuestions.orEmpty(),
-                )
-            }
-        )
-    }
-
-    val filteredHistory: List<ConsultationEntity>
-        get() = historyQuery.trim().takeIf { it.isNotEmpty() }?.let { query ->
-            history.filter {
-                it.caseTitle.contains(query, ignoreCase = true) ||
-                    it.department.contains(query, ignoreCase = true) ||
-                    it.patientName.contains(query, ignoreCase = true)
-            }
-        } ?: history
+        get() = hasApiKey || offlineMode
 
     /** 粗略的上下文 token 估算：中文约 1 字 ≈ 0.5 token，用于提前提醒。 */
     val contextTokenEstimate: Int
@@ -129,10 +109,32 @@ data class AppUiState(
         get() = contextTokenEstimate >= 12_000
 }
 
+sealed interface SettingsReadState {
+    data object Loading : SettingsReadState
+    data object Ready : SettingsReadState
+    data class Unavailable(val temporaryOffline: Boolean = false) : SettingsReadState
+}
+
+enum class HistoryTransfer {
+    RESTORING,
+    SAVING,
+}
+
 sealed interface AppEvent {
     data class ShowMessage(val message: String) : AppEvent
-    data object OpenChat : AppEvent
-    data object OpenResult : AppEvent
+    data class OpenChat(val startedAt: Long) : AppEvent
+    data class OpenResult(val recordId: Long) : AppEvent
     data object OpenSettings : AppEvent
-    data object SettingsSaved : AppEvent
+    data class SettingsSaved(val exit: SettingsExit?) : AppEvent
+}
+
+sealed interface SettingsExit {
+    data object Back : SettingsExit
+    data class Tab(val route: String) : SettingsExit
+}
+
+sealed interface StatsUiState {
+    data object Loading : StatsUiState
+    data class Ready(val summary: StatsSummary) : StatsUiState
+    data class Failed(val message: String) : StatsUiState
 }

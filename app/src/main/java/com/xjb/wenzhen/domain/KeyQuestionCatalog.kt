@@ -97,7 +97,21 @@ object KeyQuestionCatalog {
         ),
         SynonymGroup(
             triggers = listOf("放射"),
-            synonyms = listOf("放射", "牵涉", "串到", "窜到", "传到", "往别处", "肩膀", "后背", "下巴"),
+            synonyms = listOf(
+                "放射", "牵涉", "串到", "窜到", "传到", "跑到", "延伸到", "往别处", "肩膀", "后背", "下巴",
+            ),
+        ),
+        SynonymGroup(
+            triggers = listOf("呼吸困难", "气促", "气短"),
+            synonyms = listOf("呼吸困难", "气促", "气短", "喘不上气", "喘不过气", "透不过气", "上不来气"),
+        ),
+        SynonymGroup(
+            triggers = listOf("晕厥", "晕倒"),
+            synonyms = listOf("晕厥", "晕倒", "昏倒", "昏过去", "失去知觉"),
+        ),
+        SynonymGroup(
+            triggers = listOf("大汗", "出冷汗"),
+            synonyms = listOf("大汗", "出汗", "冒汗", "冷汗"),
         ),
         SynonymGroup(
             triggers = listOf("伴随"),
@@ -188,6 +202,11 @@ object KeyQuestionCatalog {
         val latin = latinWord.findAll(normalized).map { it.value }.toList()
         return (chinese + latin).distinct()
     }
+
+    internal fun equivalentTerms(word: String): List<String> =
+        listOf(word) + synonymGroups
+            .filter { word in it.triggers || word in it.synonyms }
+            .flatMap { it.triggers + it.synonyms }
 
     private fun synonymsFor(question: String): List<String> {
         val normalized = question.lowercase()

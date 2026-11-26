@@ -44,19 +44,12 @@ class UpdateInfoTest {
     }
 
     @Test
-    fun `versionCode 优先且同名版本比较数字段`() {
-        assertTrue(VersionComparator.isNewer(12, "1.2.0", 11, "9.9.9"))
-        assertFalse(VersionComparator.isNewer(11, "2.0.0", 12, "1.0.0"))
-        assertTrue(VersionComparator.isNewer(12, "1.10.0", 12, "1.9.9"))
-        assertEquals(0, VersionComparator.compareNames("1.2", "1.2.0"))
-        assertTrue(VersionComparator.compareNames("2.0.1", "2.0.0") > 0)
-    }
+    fun `只有更高的 versionCode 才会提示安装更新`() {
+        val update = UpdateInfo.parse(validJson(name = "99.0.0", code = 12))
 
-    @Test
-    fun `同 versionCode 时版本名决定是否更新`() {
-        val update = UpdateInfo.parse(validJson(name = "1.1.1", code = 2))
-        assertTrue(update.isNewerThan(2, "1.1.0"))
-        assertFalse(update.isNewerThan(3, "1.1.0"))
+        assertTrue(update.isNewerThan(11))
+        assertFalse(update.isNewerThan(12))
+        assertFalse(update.isNewerThan(13))
     }
 
     private fun validJson(

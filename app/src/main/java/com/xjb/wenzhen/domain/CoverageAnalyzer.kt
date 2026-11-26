@@ -2,8 +2,6 @@ package com.xjb.wenzhen.domain
 
 import com.xjb.wenzhen.data.model.ChatMessage
 import com.xjb.wenzhen.data.model.EncounterType
-import com.xjb.wenzhen.data.model.MessageRole
-import com.xjb.wenzhen.data.model.MessageDeliveryState
 
 enum class HistoryTopic(val label: String) {
     CHIEF_COMPLAINT("主诉"),
@@ -86,10 +84,12 @@ object CoverageAnalyzer {
         gender: String? = null,
         age: String? = null,
     ): CoverageReport {
-        val doctorText = messages
-            .filter { it.role == MessageRole.DOCTOR && it.deliveryState == MessageDeliveryState.SENT }
-            .joinToString(separator = "\n") { it.content }
-        return analyzeText(doctorText, encounterType, gender, age)
+        val questions = transcriptEntries(messages).mapIndexedNotNull { index, message ->
+            message.content.takeIf { isDoctorEvidence(index, message) }
+        }.flatMap(::interviewClauses)
+            .filter { it.isQuestion }
+            .joinToString(separator = "\n") { it.text }
+        return analyzeText(questions, encounterType, gender, age)
     }
 
     fun analyzeText(

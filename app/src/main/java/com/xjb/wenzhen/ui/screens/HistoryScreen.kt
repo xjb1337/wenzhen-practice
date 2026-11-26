@@ -9,9 +9,11 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,6 +33,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.FilterChip
@@ -43,9 +46,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -59,7 +65,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.FileProvider
 import com.xjb.wenzhen.data.db.ConsultationEntity
-import com.xjb.wenzhen.data.db.ConversationJsonCodec
+import com.xjb.wenzhen.data.db.ConsultationListItem
+import com.xjb.wenzhen.ui.HistoryTransfer
 import com.xjb.wenzhen.ui.components.DepartmentMark
 import com.xjb.wenzhen.ui.components.EmptyState
 import com.xjb.wenzhen.ui.components.LoadingState
@@ -70,16 +77,40 @@ import com.xjb.wenzhen.ui.theme.GradientStart
 import com.xjb.wenzhen.ui.theme.GradientEnd
 import com.xjb.wenzhen.ui.theme.TealPrimary
 import com.xjb.wenzhen.ui.theme.TealSecondary
+import com.xjb.wenzhen.util.HistoryBackup
 import com.xjb.wenzhen.util.HistoryExporter
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.time.Duration
+import java.time.Instant
+import java.time.ZoneId
+
+internal enum class HistoryDateFilter(val label: String) {
+    ALL("全部"),
+    TODAY("今天"),
+    LAST_WEEK("最近 7 天"),
+    LAST_MONTH("最近 30 天");
+
+    fun rangeAt(now: Long, zone: ZoneId = ZoneId.systemDefault()): LongRange = when (this) {
+        ALL -> Long.MIN_VALUE..Long.MAX_VALUE
+        TODAY -> Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+            .atStartOfDay(zone).toInstant().toEpochMilli()..now
+        LAST_WEEK -> (now - Duration.ofDays(7).toMillis())..now
+        LAST_MONTH -> (now - Duration.ofDays(30).toMillis())..now
+    }
+}
 
 @Composable
 fun HistoryScreen(
-    records: List<ConsultationEntity>,
+    records: List<ConsultationListItem>,
     isLoading: Boolean,
     errorMessage: String?,
+    loadForExport: suspend () -> List<ConsultationEntity>,
+    loadDuration: suspend (Long) -> Long?,
     onRecordClick: (Long) -> Unit = {},
     onRetry: () -> Unit = {},
     onBrowseCases: () -> Unit = {},
@@ -87,7 +118,9 @@ fun HistoryScreen(
     onQueryChange: (String) -> Unit = {},
     onDeleteRecord: (Long) -> Unit = {},
     onClearAll: () -> Unit = {},
-    onRestore: (List<ConsultationEntity>) -> Unit = {},
+    transfer: HistoryTransfer? = null,
+    onRestore: (Flow<ConsultationEntity>) -> Unit = {},
+    onSaveBackup: (suspend (List<ConsultationEntity>) -> Unit) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -96,35 +129,45 @@ fun HistoryScreen(
     var showExportMenu by remember { mutableStateOf(false) }
     var selectedDepartment by rememberSaveable { mutableStateOf("全部") }
     var scoreBand by rememberSaveable { mutableStateOf("全部") }
-    var dateBand by rememberSaveable { mutableStateOf("全部") }
-    var isFileBusy by remember { mutableStateOf(false) }
-    val scope = rememberCoroutineScope()
-    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
-        if (uri == null || isFileBusy) return@rememberLauncherForActivityResult
-        isFileBusy = true
-        scope.launch {
-            runCatching {
-                withContext(Dispatchers.IO) {
-                    val restored = HistoryExporter.readBackup(context, uri)
-                    require(restored.isNotEmpty()) { "没有可导入的记录" }
-                    restored
-                }
-            }.onSuccess { restored ->
-                onRestore(restored)
-            }.onFailure { error ->
-                Toast.makeText(context, "导入失败：${error.message}", Toast.LENGTH_LONG).show()
+    var dateBand by rememberSaveable { mutableStateOf(HistoryDateFilter.ALL.label) }
+    val dateFilter = HistoryDateFilter.entries.firstOrNull { it.label == dateBand } ?: HistoryDateFilter.ALL
+    var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(dateFilter) {
+        if (dateFilter != HistoryDateFilter.ALL) {
+            while (true) {
+                now = System.currentTimeMillis()
+                delay(60_000L - now % 60_000L)
             }
-            isFileBusy = false
         }
     }
-    fun exportFile(create: () -> java.io.File, mime: String, title: String) {
+    var isExporting by remember { mutableStateOf(false) }
+    val isFileBusy = transfer != null || isExporting
+    val scope = rememberCoroutineScope()
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri: Uri? ->
+        if (uri != null && !isFileBusy) {
+            onRestore(HistoryBackup.read(context.applicationContext, uri))
+        }
+    }
+    val saveLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null && !isFileBusy) {
+            val applicationContext = context.applicationContext
+            onSaveBackup { records -> HistoryBackup.write(applicationContext, uri, records) }
+        }
+    }
+    fun exportFile(create: suspend (List<ConsultationEntity>) -> java.io.File, mime: String, title: String) {
         if (isFileBusy) return
-        isFileBusy = true
+        isExporting = true
         scope.launch {
-            runCatching { withContext(Dispatchers.IO) { create() } }
-                .onSuccess { shareFile(context, it, mime, title) }
-                .onFailure { Toast.makeText(context, "导出失败：${it.message}", Toast.LENGTH_LONG).show() }
-            isFileBusy = false
+            try {
+                val file = withContext(Dispatchers.IO) { create(loadForExport()) }
+                shareFile(context, file, mime, title)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                Toast.makeText(context, "导出失败：${error.message}", Toast.LENGTH_LONG).show()
+            } finally {
+                isExporting = false
+            }
         }
     }
     if (showClearConfirm) {
@@ -159,38 +202,50 @@ fun HistoryScreen(
             },
         )
     }
-    val departments = listOf("全部") + records.map { it.department }.filter { it.isNotBlank() }.distinct()
+    val departments = remember(records) {
+        listOf("全部") + records.map { it.department }.filter { it.isNotBlank() }.distinct()
+    }
     val activeDepartment = if (selectedDepartment in departments) selectedDepartment else "全部"
     val normalizedQuery = query.trim()
-    val now = System.currentTimeMillis()
-    val visibleRecords = records.filter { record ->
-        val queryMatch = normalizedQuery.isEmpty() ||
-            record.caseTitle.contains(normalizedQuery, ignoreCase = true) ||
-            record.department.contains(normalizedQuery, ignoreCase = true) ||
-            record.patientName.contains(normalizedQuery, ignoreCase = true)
-        val departmentMatch = activeDepartment == "全部" || record.department == activeDepartment
-        val scoreMatch = when (scoreBand) {
-            "60 分以下" -> record.totalScore < 60
-            "60-79 分" -> record.totalScore in 60..79
-            "80 分以上" -> record.totalScore >= 80
-            else -> true
+    val dateRange = dateFilter.rangeAt(now)
+    val isFiltered = normalizedQuery.isNotEmpty() || activeDepartment != "全部" ||
+        scoreBand != "全部" || dateFilter != HistoryDateFilter.ALL
+    val visibleRecords = remember(records, normalizedQuery, activeDepartment, scoreBand, dateRange) {
+        if (!isFiltered) records else records.filter { record ->
+            val queryMatch = normalizedQuery.isEmpty() ||
+                record.caseTitle.contains(normalizedQuery, ignoreCase = true) ||
+                record.department.contains(normalizedQuery, ignoreCase = true) ||
+                record.patientName.contains(normalizedQuery, ignoreCase = true)
+            val departmentMatch = activeDepartment == "全部" || record.department == activeDepartment
+            val scoreMatch = when (scoreBand) {
+                "60 分以下" -> record.totalScore < 60
+                "60-79 分" -> record.totalScore in 60..79
+                "80 分以上" -> record.totalScore >= 80
+                else -> true
+            }
+            queryMatch && departmentMatch && scoreMatch && record.createdAt in dateRange
         }
-        val dateMatch = when (dateBand) {
-            "今天" -> now - record.createdAt < 24L * 60 * 60 * 1000
-            "最近 7 天" -> now - record.createdAt < 7L * 24 * 60 * 60 * 1000
-            "最近 30 天" -> now - record.createdAt < 30L * 24 * 60 * 60 * 1000
-            else -> true
-        }
-        queryMatch && departmentMatch && scoreMatch && dateMatch
     }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         topBar = {
             WenzhenTopBar(
                 title = "历史记录",
+                subtitle = when {
+                    transfer == HistoryTransfer.RESTORING -> "正在恢复备份…"
+                    transfer == HistoryTransfer.SAVING -> "正在保存备份…"
+                    isExporting -> "正在导出文件…"
+                    else -> null
+                },
                 actions = {
+                    if (isFileBusy) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.padding(horizontal = 12.dp).size(20.dp),
+                            strokeWidth = 2.dp,
+                        )
+                    }
                     Box {
-                        IconButton(onClick = { showExportMenu = true }) {
+                        IconButton(onClick = { showExportMenu = true }, enabled = !isFileBusy) {
                             Icon(
                                 Icons.Outlined.Share,
                                 contentDescription = if (records.isNotEmpty()) "导出或恢复历史记录" else "从备份恢复历史记录",
@@ -206,7 +261,7 @@ fun HistoryScreen(
                                     onClick = {
                                         showExportMenu = false
                                         exportFile(
-                                            create = { HistoryExporter.writeMarkdown(context, records) },
+                                            create = { HistoryExporter.writeMarkdown(context, it) },
                                             mime = "text/markdown",
                                             title = "导出问诊历史",
                                         )
@@ -217,18 +272,25 @@ fun HistoryScreen(
                                     onClick = {
                                         showExportMenu = false
                                         exportFile(
-                                            create = { HistoryExporter.writePdf(context, records) },
+                                            create = { HistoryExporter.writePdf(context, it) },
                                             mime = "application/pdf",
                                             title = "导出问诊历史",
                                         )
                                     },
                                 )
                                 DropdownMenuItem(
-                                    text = { Text("导出 JSON 备份") },
+                                    text = { Text("保存 JSON 备份") },
+                                    onClick = {
+                                        showExportMenu = false
+                                        saveLauncher.launch(HistoryBackup.suggestedFilename())
+                                    },
+                                )
+                                DropdownMenuItem(
+                                    text = { Text("分享 JSON 备份") },
                                     onClick = {
                                         showExportMenu = false
                                         exportFile(
-                                            create = { HistoryExporter.writeJson(context, records) },
+                                            create = { HistoryBackup.write(context, it) },
                                             mime = "application/json",
                                             title = "备份问诊历史",
                                         )
@@ -245,7 +307,7 @@ fun HistoryScreen(
                         }
                     }
                     if (records.isNotEmpty()) {
-                        IconButton(onClick = { showClearConfirm = true }) {
+                        IconButton(onClick = { showClearConfirm = true }, enabled = !isFileBusy) {
                             Icon(Icons.Outlined.Delete, contentDescription = "清空历史记录")
                         }
                     }
@@ -284,7 +346,9 @@ fun HistoryScreen(
             else -> LazyColumn(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding),
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding)
+                    .imePadding(),
                 contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 28.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
@@ -328,11 +392,11 @@ fun HistoryScreen(
                             modifier = Modifier.horizontalScroll(rememberScrollState()),
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            listOf("全部", "今天", "最近 7 天", "最近 30 天").forEach { band ->
+                            HistoryDateFilter.entries.forEach { band ->
                                 FilterChip(
-                                    selected = dateBand == band,
-                                    onClick = { dateBand = band },
-                                    label = { Text(band) },
+                                    selected = dateFilter == band,
+                                    onClick = { dateBand = band.label },
+                                    label = { Text(band.label) },
                                 )
                             }
                         }
@@ -351,7 +415,7 @@ fun HistoryScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "全部记录",
+                            text = if (isFiltered) "筛选结果" else "全部记录",
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
@@ -364,17 +428,23 @@ fun HistoryScreen(
                 }
                 if (visibleRecords.isEmpty()) {
                     item {
-                        Text(
-                            text = "没有符合筛选条件的记录。",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(vertical = 24.dp),
+                        EmptyState(
+                            icon = Icons.Outlined.History,
+                            title = "没有符合条件的记录",
+                            actionLabel = "清除筛选",
+                            onAction = {
+                                onQueryChange("")
+                                selectedDepartment = "全部"
+                                scoreBand = "全部"
+                                dateBand = HistoryDateFilter.ALL.label
+                            },
                         )
                     }
                 }
                 items(visibleRecords, key = { it.id }) { record ->
                     HistoryCard(
                         record = record,
+                        loadDuration = loadDuration,
                         onClick = { onRecordClick(record.id) },
                         onDelete = { pendingDeleteId = record.id },
                     )
@@ -398,18 +468,9 @@ private fun shareFile(context: android.content.Context, file: java.io.File, mime
     }
 }
 
-private fun conversationDurationMinutes(record: ConsultationEntity): Long? {
-    val messages = ConversationJsonCodec.decode(record.conversationJson).filter { it.timestamp > 0 }
-    if (messages.size < 2) return null
-    val start = messages.minOf { it.timestamp }
-    val end = messages.maxOf { it.timestamp }
-    val minutes = (end - start) / 60_000
-    return minutes.takeIf { it > 0 }
-}
-
 @Composable
-private fun HistorySummary(records: List<ConsultationEntity>) {
-    val average = records.map { it.totalScore }.average().toInt()
+private fun HistorySummary(records: List<ConsultationListItem>) {
+    val average = remember(records) { (records.sumOf { it.totalScore.toLong() } / records.size).toInt() }
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -459,11 +520,14 @@ private fun HistorySummary(records: List<ConsultationEntity>) {
 
 @Composable
 private fun HistoryCard(
-    record: ConsultationEntity,
+    record: ConsultationListItem,
+    loadDuration: suspend (Long) -> Long?,
     onClick: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val durationMinutes = remember(record.conversationJson) { conversationDurationMinutes(record) }
+    val durationMinutes by produceState<Long?>(initialValue = null, key1 = record.id) {
+        value = loadDuration(record.id)
+    }
     Surface(
         modifier = Modifier
             .fillMaxWidth()

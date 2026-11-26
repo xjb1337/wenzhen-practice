@@ -2,6 +2,7 @@ package com.xjb.wenzhen.ui
 
 import android.content.Context
 import android.content.SharedPreferences
+import android.os.Looper
 import android.database.sqlite.SQLiteException
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
@@ -26,6 +27,7 @@ import com.xjb.wenzhen.data.model.LlmConfig
 import com.xjb.wenzhen.data.model.LlmMessage
 import com.xjb.wenzhen.data.model.MessageDeliveryState
 import com.xjb.wenzhen.data.model.MessageRole
+import com.xjb.wenzhen.data.model.PatientPersonality
 import com.xjb.wenzhen.data.model.ThinkingLevel
 import com.xjb.wenzhen.data.settings.AppSettings
 import com.xjb.wenzhen.data.settings.SettingsRepository
@@ -34,6 +36,7 @@ import com.xjb.wenzhen.domain.DOCTOR_OPENING_LINE
 import com.xjb.wenzhen.domain.RuleScoreCalculator
 import com.xjb.wenzhen.domain.ScoreParser
 import com.xjb.wenzhen.domain.ScoreResult
+import com.xjb.wenzhen.ui.theme.AppTheme
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -42,6 +45,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.job
@@ -71,6 +75,8 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -173,14 +179,157 @@ class AppViewModelTest {
     )
 
     @Test
+    fun `冷启动读取设置在后台且读取完成前不暴露默认模式`() = runTest(dispatcher) {
+        val readStarted = CountDownLatch(1)
+        val releaseRead = CountDownLatch(1)
+        val mainThreadRead = AtomicBoolean(false)
+        settingsPrefs.edit().putBoolean("offline_mode", true).putBoolean("privacy_accepted", true).commit()
+        val blockingPrefs = object : SharedPreferences by settingsPrefs {
+            override fun getString(key: String?, defValue: String?): String? {
+                if (key == "deepseek_api_key") {
+                    mainThreadRead.set(Looper.getMainLooper().isCurrentThread)
+                    readStarted.countDown()
+                    check(releaseRead.await(2, TimeUnit.SECONDS))
+                }
+                return settingsPrefs.getString(key, defValue)
+            }
+        }
+        val vm = AppViewModel(appContainer(SuccessClient(), SettingsRepository(context, blockingPrefs)))
+        storeViewModel("vm-startup-read", vm)
+
+        try {
+            runCurrent()
+            assertTrue(readStarted.await(2, TimeUnit.SECONDS))
+            assertFalse(mainThreadRead.get())
+            assertEquals(SettingsReadState.Loading, vm.uiState.value.settingsRead)
+        } finally {
+            releaseRead.countDown()
+        }
+        waitUntil { vm.uiState.value.settingsRead == SettingsReadState.Ready }
+        assertTrue(vm.uiState.value.settings.offlineMode)
+        assertTrue(vm.uiState.value.settings.privacyAccepted)
+    }
+
+    @Test
+    fun `读取设置失败仍可临时离线并能重试取回原有设置`() = runTest(dispatcher) {
+        val unavailable = AtomicBoolean(true)
+        settingsPrefs.edit().putString("deepseek_api_key", "synthetic-original-key").commit()
+        val flakyPrefs = object : SharedPreferences by settingsPrefs {
+            override fun getString(key: String?, defValue: String?): String? {
+                if (unavailable.get()) error("模拟加密设置无法读取")
+                return settingsPrefs.getString(key, defValue)
+            }
+        }
+        val vm = AppViewModel(appContainer(SuccessClient(), SettingsRepository(context, flakyPrefs)))
+        storeViewModel("vm-settings-retry", vm)
+        waitUntil { vm.uiState.value.settingsRead is SettingsReadState.Unavailable }
+
+        vm.continueOfflineWithoutSettings()
+        vm.acceptPrivacyNotice()
+        vm.setOfflineMode(false)
+        assertEquals(SettingsReadState.Unavailable(temporaryOffline = true), vm.uiState.value.settingsRead)
+        assertTrue(vm.uiState.value.settings.offlineMode)
+        assertTrue(vm.uiState.value.settings.privacyAccepted)
+        assertEquals("synthetic-original-key", settingsPrefs.getString("deepseek_api_key", null))
+        assertFalse(settingsPrefs.getBoolean("privacy_accepted", false))
+
+        unavailable.set(false)
+        vm.reloadSettings()
+        waitUntil { vm.uiState.value.settingsRead == SettingsReadState.Ready }
+        assertEquals("synthetic-original-key", vm.uiState.value.settings.apiKey)
+        assertFalse(vm.uiState.value.settings.offlineMode)
+    }
+
+    @Test
     fun `保存 HTTP Base URL 会被拒绝且不落库`() = runTest(dispatcher) {
         val vm = viewModel(SuccessClient())
 
+        val initialSettings = vm.uiState.value.settings
+        val initialPreferences = settingsPrefs.all
         vm.saveSettings(apiKey = "k", model = "deepseek-chat", baseUrl = "http://api.test.com")
+
+        assertFalse(vm.uiState.value.settingsFormSaving)
+        assertEquals(initialSettings, vm.uiState.value.settings)
+        assertEquals(initialPreferences, settingsPrefs.all)
 
         val error = vm.uiState.value.settingsSaveError
         assertNotNull(error)
         assertTrue(error.orEmpty().contains("HTTPS"))
+    }
+
+    @Test
+    fun `设置写入在后台串行执行且开启离线立即生效`() = runTest(dispatcher) {
+        val firstWriteStarted = AtomicBoolean(false)
+        val wroteOnMain = AtomicBoolean(false)
+        val writeCount = AtomicInteger()
+        val resumeFirstWrite = CountDownLatch(1)
+        val delayedPrefs = object : SharedPreferences by settingsPrefs {
+            override fun edit(): SharedPreferences.Editor {
+                if (Looper.myLooper() == Looper.getMainLooper()) wroteOnMain.set(true)
+                if (writeCount.getAndIncrement() == 0) {
+                    firstWriteStarted.set(true)
+                    check(resumeFirstWrite.await(5, TimeUnit.SECONDS)) { "测试未释放首个设置写入" }
+                }
+                return settingsPrefs.edit()
+            }
+        }
+        val repository = SettingsRepository(context, delayedPrefs)
+        val vm = viewModel(SuccessClient(), settingsRepository = repository)
+        try {
+            vm.saveSettings("synthetic-new-key", AppSettings.MODEL_PRO, AppSettings.DEFAULT_BASE_URL)
+            waitUntil { firstWriteStarted.get() }
+            assertTrue(vm.uiState.value.settingsFormSaving)
+
+            vm.setOfflineMode(true)
+            vm.setTheme(AppTheme.ROSE)
+            vm.setTheme(AppTheme.JADE)
+            runCurrent()
+
+            assertTrue(vm.uiState.value.offlineMode)
+            assertFalse(vm.uiState.value.settings.offlineMode)
+            assertFalse(repository.load().offlineMode)
+            assertEquals(1, writeCount.get())
+        } finally {
+            resumeFirstWrite.countDown()
+        }
+
+        waitUntil { vm.uiState.value.settings.theme == AppTheme.JADE }
+        val persisted = repository.load()
+        assertFalse(wroteOnMain.get())
+        assertEquals(4, writeCount.get())
+        assertEquals(vm.uiState.value.settings, persisted)
+        assertEquals("synthetic-new-key", persisted.apiKey)
+        assertEquals(AppSettings.MODEL_PRO, persisted.model)
+        assertTrue(persisted.offlineMode)
+        assertNull(vm.uiState.value.pendingOfflineMode)
+        assertFalse(vm.uiState.value.settingsFormSaving)
+    }
+
+    @Test
+    fun `保存并离开只会在持久化成功后发出导航事件`() = runTest(dispatcher) {
+        val storageUnavailable = AtomicBoolean(true)
+        val flakyPrefs = object : SharedPreferences by settingsPrefs {
+            override fun edit(): SharedPreferences.Editor {
+                check(!storageUnavailable.get()) { "测试写入失败" }
+                return settingsPrefs.edit()
+            }
+        }
+        val vm = viewModel(SuccessClient(), settingsRepository = SettingsRepository(context, flakyPrefs))
+        val initial = vm.uiState.value.settings
+        val exit = SettingsExit.Tab("history")
+
+        vm.saveSettings("synthetic-new-key", AppSettings.MODEL_FLASH, AppSettings.DEFAULT_BASE_URL, exit = exit)
+        waitUntil { !vm.uiState.value.settingsFormSaving }
+        assertEquals(initial, vm.uiState.value.settings)
+        assertNotNull(vm.uiState.value.settingsSaveError)
+        assertTrue(vm.events.first() is AppEvent.ShowMessage)
+
+        storageUnavailable.set(false)
+        vm.saveSettings("synthetic-new-key", AppSettings.MODEL_FLASH, AppSettings.DEFAULT_BASE_URL, exit = exit)
+        waitUntil { !vm.uiState.value.settingsFormSaving }
+        assertEquals(AppEvent.SettingsSaved(exit), vm.events.first())
+        assertEquals("synthetic-new-key", settingsRepository.load().apiKey)
+        assertNull(vm.uiState.value.settingsSaveError)
     }
 
     @Test
@@ -348,11 +497,18 @@ class AppViewModelTest {
             updatedAt = 2_000L,
         )
         val container = AppContainer(context, overrideLlmClient = SuccessClient(), overrideDatabase = db)
-        val vm = AppViewModel(container, AppUiState(settings = apiSettings(), draft = draft))
+        runBlocking(Dispatchers.IO) { db.consultationDraftDao().upsert(draft) }
+        val vm = AppViewModel(container, AppUiState(settings = apiSettings()))
         storeViewModel("vm-draft", vm)
+        waitUntil { !vm.uiState.value.draftLoading }
 
-        vm.resumeDraft()
+        vm.restoreConsultation(draft.startedAt - 1)
+        assertNull(vm.uiState.value.activeCase)
 
+        vm.restoreConsultation(draft.startedAt)
+
+        assertEquals(medicalCase.id, vm.uiState.value.activeCase?.id)
+        assertEquals(draft.startedAt, vm.uiState.value.consultationStartedAt)
         val messages = vm.uiState.value.messages
         assertEquals(3, messages.size)
         assertEquals(MessageRole.DOCTOR, messages[0].role)
@@ -544,7 +700,7 @@ class AppViewModelTest {
         val events = mutableListOf<AppEvent>()
         backgroundScope.launch(UnconfinedTestDispatcher(dispatcher.scheduler)) { vm.events.collect { events += it } }
 
-        vm.restoreHistory(listOf(record, record.copy(id = 0L)))
+        vm.restoreHistory(listOf(record, record.copy(id = 0L)).asFlow())
         waitUntil { events.any { it is AppEvent.ShowMessage } }
 
         assertEquals(
@@ -554,19 +710,71 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `历史摘要保留显示字段且按需读取用时和完整备份`() = runTest(dispatcher) {
+        val dao = db.consultationDao()
+        val record = entityFor(0L, BuiltInCases.all.first()).copy(
+            conversationJson = ConversationJsonCodec.encode(
+                listOf(
+                    ChatMessage(MessageRole.DOCTOR, "怎么不舒服？", timestamp = 1_000L),
+                    ChatMessage(MessageRole.PATIENT, "练习对话", timestamp = 121_000L),
+                )
+            ),
+            medicalRecord = "测试用病历",
+        )
+        val id = dao.insert(record)
+        val vm = viewModel(SuccessClient())
+        waitUntil { vm.uiState.value.history.isNotEmpty() }
+
+        val summary = vm.uiState.value.history.single()
+        assertEquals(id, summary.id)
+        assertEquals(record.caseTitle, summary.caseTitle)
+        assertEquals(record.patientName, summary.patientName)
+        assertEquals(record.totalScore, summary.totalScore)
+        assertEquals(2L, vm.loadHistoryDuration(id))
+        assertEquals(record.copy(id = id), vm.loadHistoryForExport().single())
+    }
+
+    @Test
+    fun `统计按订阅读取存档成绩且随历史变更刷新`() = runTest(dispatcher) {
+        val dao = db.consultationDao()
+        val case = BuiltInCases.all.first()
+        val recentId = dao.insert(entityFor(0L, case).copy(
+            createdAt = 2_000L,
+            totalScore = 90,
+            scoreJson = """{"totalScore":88,"遗漏要点":["用药史","伴随症状"]}""",
+        ))
+        val oldId = dao.insert(entityFor(0L, case).copy(
+            createdAt = 1_000L,
+            totalScore = 60,
+            scoreJson = "invalid legacy score JSON",
+        ))
+        val vm = viewModel(SuccessClient())
+        assertEquals(StatsUiState.Loading, vm.statsState.value)
+        backgroundScope.launch { vm.statsState.collect {} }
+        runCurrent()
+
+        waitUntil { vm.statsState.value is StatsUiState.Ready }
+        val before = (vm.statsState.value as StatsUiState.Ready).summary
+        assertEquals(2, before.attempts)
+        assertEquals(75, before.averageScore)
+        assertEquals(listOf(60, 90), before.trend.map { it.score })
+        assertEquals(setOf("用药史", "伴随症状"), before.topMissedQuestions.map { it.question }.toSet())
+
+        dao.updateScore(recentId, """{"totalScore":40,"missedQuestions":["暴露史"]}""", 90)
+        waitUntil {
+            (vm.statsState.value as? StatsUiState.Ready)?.summary?.topMissedQuestions?.singleOrNull()?.question == "暴露史"
+        }
+        dao.deleteById(oldId)
+        waitUntil { (vm.statsState.value as? StatsUiState.Ready)?.summary?.attempts == 1 }
+        val after = (vm.statsState.value as StatsUiState.Ready).summary
+        assertEquals(90, after.averageScore)
+        assertEquals(listOf(90), after.trend.map { it.score })
+    }
+
+    @Test
     fun `删除历史记录遇到数据库异常时不崩溃并收到提示`() = runTest(dispatcher) {
-        val failingDao = object : ConsultationDao {
-            override fun observeAll(): Flow<List<ConsultationEntity>> = flowOf(emptyList())
-            override suspend fun getById(id: Long): ConsultationEntity? = null
-            override suspend fun findCompletedAfter(caseJson: String, since: Long): ConsultationEntity? = null
-            override suspend fun insert(entity: ConsultationEntity): Long =
-                throw SQLiteException("disk I/O error")
-            override suspend fun countBySignature(caseJson: String, createdAt: Long): Int = 0
-            override suspend fun updateScore(id: Long, scoreJson: String, totalScore: Int): Int = 0
+        val failingDao = object : ConsultationDao by db.consultationDao() {
             override suspend fun deleteById(id: Long) {
-                throw SQLiteException("disk I/O error")
-            }
-            override suspend fun deleteAll() {
                 throw SQLiteException("disk I/O error")
             }
         }
@@ -578,6 +786,46 @@ class AppViewModelTest {
         waitUntil { events.any { it is AppEvent.ShowMessage } }
 
         assertTrue("events=$events", events.any { it is AppEvent.ShowMessage })
+    }
+
+    @Test
+    fun `已有草稿时 AI 生成只保存新病例且病例标识不重复`() = runTest(dispatcher) {
+        val original = BuiltInCases.all.first()
+        val draft = ConsultationDraftEntity(
+            caseJson = CaseJsonCodec.encode(original),
+            conversationJson = "[]",
+            patientPersonality = "COOPERATIVE",
+            encounterType = "OUTPATIENT",
+            startedAt = 1_000L,
+            updatedAt = 2_000L,
+        )
+        runBlocking(Dispatchers.IO) { db.consultationDraftDao().upsert(draft) }
+        val generated = original.copy(title = "用于回归测试的生成病例")
+        val vm = AppViewModel(
+            appContainer(SuccessClient(CaseJsonCodec.encode(generated))),
+            AppUiState(settings = apiSettings()),
+        )
+        storeViewModel("vm-generation-with-draft", vm)
+        waitUntil { !vm.uiState.value.draftLoading }
+
+        vm.generateCase(original.department, original.difficulty)
+        waitUntil {
+            !vm.uiState.value.isGeneratingCase &&
+                vm.uiState.value.cases.any { it.title == generated.title }
+        }
+
+        val state = vm.uiState.value
+        assertNull(state.generationError)
+        assertNull(state.activeCase)
+        assertEquals(draft.startedAt, state.draft?.startedAt)
+        assertEquals(draft.startedAt, runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() }?.startedAt)
+        assertEquals(1, state.cases.count { it.title == generated.title })
+        assertTrue(vm.events.first() is AppEvent.ShowMessage)
+
+        val generatedId = state.cases.single { it.title == generated.title }.id
+        vm.setCaseFavorite(generatedId, true)
+        waitUntil { vm.uiState.value.savedCases.any { it.id == generatedId && it.favorite } }
+        assertTrue(vm.uiState.value.savedCases.single { it.id == generatedId }.caseJson.isNotBlank())
     }
 
     @Test
@@ -670,22 +918,53 @@ class AppViewModelTest {
         waitUntil { vm.uiState.value.draft == null }
 
         val result = vm.uiState.value.currentResult!!
+        val score = requireNotNull(result.score)
         val rule = RuleScoreCalculator.compute(medicalCase, conversation, diagnosis, basis, treatment)
         val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
         assertEquals(1, records.size)
         assertEquals(result.recordId, records.single().id)
         assertEquals(rule.total, records.single().totalScore)
-        assertEquals(rule.total, result.score.totalScore)
+        assertEquals(rule.total, score.totalScore)
         assertTrue(rule.total > 0)
-        assertTrue(result.score.aiCommentFailed)
+        assertTrue(score.aiCommentFailed)
         assertEquals(
             AiCommentStatus.FAILED,
             ScoreParser.parse(records.single().scoreJson).aiCommentStatus,
         )
         assertTrue(result.notice.orEmpty().contains("AI 点评生成失败"))
         assertFalse(result.notice.orEmpty().contains("可返回后重试"))
-        assertTrue(result.score.improvements.none { it.contains("可返回后重试") })
+        assertTrue(score.improvements.none { it.contains("可返回后重试") })
         assertNull(runBlocking(Dispatchers.IO) { db.consultationDraftDao().get() })
+    }
+
+    @Test
+    fun `历史提交成功后草稿清除失败也能查看已保存的结果`() = runTest(dispatcher) {
+        val draftDao = object : ConsultationDraftDao {
+            override suspend fun get(): ConsultationDraftEntity? = null
+
+            override suspend fun upsert(draft: ConsultationDraftEntity) = Unit
+
+            override suspend fun delete() {
+                error("模拟草稿清除失败")
+            }
+        }
+        val vm = viewModel(
+            ValidScoreClient(),
+            consultationDraftRepository = ConsultationDraftRepository(draftDao),
+        )
+
+        vm.finishConsultation("初步诊断", "诊断依据", generateRecord = false)
+        waitUntil { vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null }
+
+        val result = requireNotNull(vm.uiState.value.currentResult)
+        assertNull(vm.uiState.value.finishError)
+        val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
+        assertEquals(result.recordId, records.single().id)
+        assertEquals(result.recordId, (vm.events.first() as AppEvent.OpenResult).recordId)
+
+        vm.finishConsultation("重复提交", "诊断依据", generateRecord = false)
+        advanceUntilIdle()
+        assertEquals(1, runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first().size })
     }
 
     @Test
@@ -703,9 +982,14 @@ class AppViewModelTest {
         advanceUntilIdle()
         waitUntil { vm.uiState.value.currentResult != null || vm.uiState.value.finishError != null }
         val first = vm.uiState.value.currentResult!!
-        assertTrue(first.score.aiCommentFailed)
+        val firstScore = requireNotNull(first.score)
+        assertTrue(firstScore.aiCommentFailed)
         assertTrue(first.recordId > 0L)
 
+        val archivedScore = firstScore.copy(totalScore = 87, coverageScore = 33)
+        runBlocking(Dispatchers.IO) {
+            db.consultationDao().updateScore(first.recordId, ScoreParser.encode(archivedScore), archivedScore.totalScore)
+        }
         client.failScore = false
         vm.regenerateAiComment(first.recordId)
         advanceUntilIdle()
@@ -715,9 +999,12 @@ class AppViewModelTest {
         }
 
         val updated = vm.uiState.value.currentResult!!
+        val updatedScore = requireNotNull(updated.score)
         assertEquals(first.recordId, updated.recordId)
-        assertEquals(first.score.totalScore, updated.score.totalScore)
-        assertTrue(updated.score.strengths.contains("围绕主诉展开"))
+        assertEquals(archivedScore.totalScore, updatedScore.totalScore)
+        assertEquals(archivedScore.coverageScore, updatedScore.coverageScore)
+        assertEquals(archivedScore.evidence, updatedScore.evidence)
+        assertTrue(updatedScore.strengths.contains("围绕主诉展开"))
         assertNull(updated.notice)
 
         val records = runBlocking(Dispatchers.IO) { db.consultationDao().observeAll().first() }
@@ -727,7 +1014,7 @@ class AppViewModelTest {
         assertEquals(AiCommentStatus.OK, stored.aiCommentStatus)
         assertTrue(stored.strengths.contains("围绕主诉展开"))
         assertTrue(stored.improvements.contains("继续完善问诊顺序"))
-        assertEquals(first.score.totalScore, records.single().totalScore)
+        assertEquals(archivedScore.totalScore, records.single().totalScore)
     }
 
     @Test
@@ -809,6 +1096,33 @@ class AppViewModelTest {
     }
 
     @Test
+    fun `旧记录没有评分分项仍能打开已保存总分病历和对话`() = runTest(dispatcher) {
+        val medicalCase = BuiltInCases.all.first()
+        val messages = listOf(ChatMessage(MessageRole.DOCTOR, "胸口疼了多久？"))
+        val recordId = runBlocking(Dispatchers.IO) {
+            db.consultationDao().insert(
+                entityFor(0L, medicalCase).copy(
+                    scoreJson = """{"totalScore":72}""",
+                    totalScore = 72,
+                    medicalRecord = "已存档的病历",
+                    conversationJson = ConversationJsonCodec.encode(messages),
+                ),
+            )
+        }
+        val vm = viewModel(SuccessClient())
+
+        vm.loadHistoryDetail(recordId)
+        waitUntil { !vm.uiState.value.historyDetailLoading }
+
+        val detail = requireNotNull(vm.uiState.value.historyDetail)
+        assertNull(vm.uiState.value.historyDetailError)
+        assertNull(detail.score)
+        assertEquals(72, detail.savedTotalScore)
+        assertEquals("已存档的病历", detail.medicalRecord)
+        assertEquals(messages, detail.messages)
+    }
+
+    @Test
     fun `启动时清理已完成问诊遗留的草稿`() = runTest(dispatcher) {
         val medicalCase = BuiltInCases.all.first()
         val draft = ConsultationDraftEntity(
@@ -858,13 +1172,13 @@ class AppViewModelTest {
     }
 
     @Test
-    fun `测试连接遇到协程取消时不写入失败状态`() = runTest(dispatcher) {
+    fun `测试连接取消后清除正在测试状态且可重试`() = runTest(dispatcher) {
         val vm = viewModel(CancellingClient())
 
         vm.testConnection("key", "deepseek-chat", "https://api.deepseek.com", ThinkingLevel.OFF)
         advanceUntilIdle()
 
-        assertTrue(vm.uiState.value.connectionTest.isTesting)
+        assertFalse(vm.uiState.value.connectionTest.isTesting)
         assertNull(vm.uiState.value.connectionTest.message)
         assertNull(vm.uiState.value.connectionTest.isSuccess)
     }
@@ -885,15 +1199,22 @@ class AppViewModelTest {
                 temperature: Double,
                 onDelta: suspend (String) -> Unit,
             ): String = throw AssertionError("离线模式不应调用在线 stream")
+
+            override suspend fun testConnection(config: LlmConfig): ConnectionTestResult =
+                throw AssertionError("离线模式不应测试在线连接")
         }
         val vm = viewModel(
             client = noNetworkClient,
             settings = apiSettings().copy(offlineMode = true),
         )
 
+        val medicalCase = BuiltInCases.all.first()
+        vm.openCase(medicalCase, PatientPersonality.ANXIOUS)
         vm.sendMessage("您胸痛多久了？")
         advanceUntilIdle()
 
+        assertTrue(vm.uiState.value.messages.last().content.contains("要不要紧"))
+        assertTrue(vm.uiState.value.messages.last().content.contains("3小时前"))
         assertFalse(vm.uiState.value.isPatientTyping)
         assertNull(vm.uiState.value.chatError)
         assertEquals(MessageDeliveryState.SENT, vm.uiState.value.messages[2].deliveryState)
@@ -904,7 +1225,127 @@ class AppViewModelTest {
 
         val result = vm.uiState.value.currentResult!!
         assertFalse(result.isAiGeneratedCase)
-        assertFalse(result.score.aiCommentFailed)
+        assertFalse(requireNotNull(result.score).aiCommentFailed)
+
+        val case = BuiltInCases.all.first()
+        vm.generateCase(case.department, case.difficulty)
+        vm.regenerateAiComment(result.recordId)
+        vm.testConnection("sk-synthetic", AppSettings.MODEL_FLASH, AppSettings.DEFAULT_BASE_URL)
+        advanceUntilIdle()
+
+        assertFalse(vm.uiState.value.isGeneratingCase)
+        assertNull(vm.uiState.value.regeneratingCommentId)
+        assertEquals(AppSettings.OFFLINE_AI_MESSAGE, vm.uiState.value.connectionTest.message)
+        assertEquals(AppSettings.OFFLINE_AI_MESSAGE, vm.uiState.value.currentResult?.notice)
+    }
+
+    @Test
+    fun `切换离线练习会取消正在生成的病例和连接测试`() = runTest(dispatcher) {
+        val generationStarted = CompletableDeferred<Unit>()
+        val generationStopped = CompletableDeferred<Unit>()
+        val testStarted = CompletableDeferred<Unit>()
+        val testStopped = CompletableDeferred<Unit>()
+        val client = object : LlmClient {
+            override suspend fun complete(config: LlmConfig, messages: List<LlmMessage>, jsonMode: Boolean, temperature: Double): String {
+                generationStarted.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    generationStopped.complete(Unit)
+                }
+            }
+
+            override suspend fun testConnection(config: LlmConfig): ConnectionTestResult {
+                testStarted.complete(Unit)
+                try {
+                    awaitCancellation()
+                } finally {
+                    testStopped.complete(Unit)
+                }
+            }
+        }
+        val vm = viewModel(client)
+        waitUntil { !vm.uiState.value.draftLoading }
+        val case = BuiltInCases.all.first()
+        vm.generateCase(case.department, case.difficulty)
+        vm.testConnection("sk-synthetic", AppSettings.MODEL_FLASH, AppSettings.DEFAULT_BASE_URL)
+        runCurrent()
+        assertTrue(generationStarted.isCompleted)
+        assertTrue(testStarted.isCompleted)
+
+        vm.setOfflineMode(true)
+        runCurrent()
+
+        assertTrue(generationStopped.isCompleted)
+        assertTrue(testStopped.isCompleted)
+        assertTrue(vm.uiState.value.offlineMode)
+        waitUntil { vm.uiState.value.pendingOfflineMode == null }
+        assertTrue(vm.uiState.value.settings.offlineMode)
+        assertFalse(vm.uiState.value.isGeneratingCase)
+        assertFalse(vm.uiState.value.connectionTest.isTesting)
+        assertTrue(vm.uiState.value.savedCases.isEmpty())
+    }
+
+    @Test
+    fun `提交后开启离线会中止两路 AI 请求并保存本地评分`() = runTest(dispatcher) {
+        val started = AtomicInteger()
+        val stopped = AtomicInteger()
+        val client = object : LlmClient {
+            override suspend fun complete(
+                config: LlmConfig,
+                messages: List<LlmMessage>,
+                jsonMode: Boolean,
+                temperature: Double,
+            ): String {
+                started.incrementAndGet()
+                try {
+                    awaitCancellation()
+                } finally {
+                    stopped.incrementAndGet()
+                }
+            }
+
+            override suspend fun testConnection(config: LlmConfig) = ConnectionTestResult.Success
+        }
+        val vm = viewModel(client)
+        waitUntil { !vm.uiState.value.draftLoading }
+        vm.finishConsultation("急性心肌梗死", "持续胸痛伴大汗", generateRecord = true)
+        runCurrent()
+        assertEquals(2, started.get())
+
+        vm.setOfflineMode(true)
+        waitUntil { vm.uiState.value.currentResult != null && vm.uiState.value.pendingOfflineMode == null }
+        val result = requireNotNull(vm.uiState.value.currentResult)
+        val saved = db.consultationDao().getById(result.recordId)
+
+        assertEquals(2, stopped.get())
+        assertFalse(vm.uiState.value.isFinishing)
+        val score = requireNotNull(result.score)
+        assertTrue(score.diagnosisExplanation.contains("本地规则评分"))
+        assertTrue(result.medicalRecord.startsWith("【参考病历】"))
+        assertTrue(result.notice.orEmpty().contains("已切换至离线练习"))
+        assertEquals(score.totalScore, saved?.totalScore)
+    }
+
+    @Test
+    fun `内置病例收藏持久化且不会复制或删除病例`() = runTest(dispatcher) {
+        val vm = viewModel(SuccessClient())
+        val case = BuiltInCases.all.first()
+
+        vm.setCaseFavorite(case.id, true)
+        vm.setCaseFavorite(case.id, true)
+        waitUntil { vm.uiState.value.savedCases.any { it.id == case.id && it.favorite } }
+        assertEquals(1, vm.uiState.value.cases.count { it.id == case.id })
+        assertFalse(vm.uiState.value.cases.single { it.id == case.id }.isAiGenerated)
+
+        val reopened = viewModel(SuccessClient())
+        waitUntil { reopened.uiState.value.savedCases.any { it.id == case.id && it.favorite } }
+        reopened.deleteSavedCase(case.id)
+        assertTrue(reopened.uiState.value.savedCases.single { it.id == case.id }.favorite)
+
+        reopened.setCaseFavorite(case.id, false)
+        waitUntil { reopened.uiState.value.savedCases.any { it.id == case.id && !it.favorite } }
+        assertEquals(1, reopened.uiState.value.cases.count { it.id == case.id })
     }
 
     @Test
@@ -915,7 +1356,7 @@ class AppViewModelTest {
         val dao = object : ConsultationDao by db.consultationDao() {
             override suspend fun getById(id: Long): ConsultationEntity? {
                 if (id == 1L) {
-                    firstGate.await()
+                    withContext(NonCancellable) { firstGate.await() }
                     return entityFor(1L, firstCase)
                 }
                 return entityFor(2L, secondCase)
@@ -929,8 +1370,11 @@ class AppViewModelTest {
         vm.loadHistoryDetail(1L)
         dispatcher.scheduler.runCurrent()
         vm.loadHistoryDetail(2L)
-        advanceUntilIdle()
-        firstGate.complete(Unit)
+        try {
+            waitUntil { vm.uiState.value.historyDetail?.recordId == 2L }
+        } finally {
+            firstGate.complete(Unit)
+        }
         advanceUntilIdle()
 
         assertEquals(2L, vm.uiState.value.historyDetail?.recordId)

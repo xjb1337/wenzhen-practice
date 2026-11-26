@@ -2,8 +2,11 @@ package com.xjb.wenzhen.data.update
 
 import android.content.Context
 import com.xjb.wenzhen.BuildConfig
+import com.xjb.wenzhen.data.api.executeCall
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
@@ -46,10 +49,7 @@ class UpdateChecker(
 ) {
     private val appContext = context.applicationContext
 
-    suspend fun checkForUpdate(
-        currentVersionCode: Int,
-        currentVersionName: String,
-    ): UpdateCheckResult = withContext(Dispatchers.IO) {
+    suspend fun checkForUpdate(currentVersionCode: Int): UpdateCheckResult = withContext(Dispatchers.IO) {
         val request = Request.Builder()
             .url(UPDATE_URL)
             .header("Accept", "application/json")
@@ -57,7 +57,7 @@ class UpdateChecker(
             .get()
             .build()
         val raw = try {
-            httpClient.newCall(request).execute().use { response ->
+            executeCall(httpClient.newCall(request)) { response ->
                 if (!response.isSuccessful) {
                     throw UpdateParseException("检查更新失败（HTTP ${response.code}），请稍后重试。")
                 }
@@ -68,13 +68,14 @@ class UpdateChecker(
         } catch (error: UpdateParseException) {
             throw error
         } catch (error: Exception) {
+            currentCoroutineContext().ensureActive()
             throw UpdateParseException("网络错误，暂时无法检查更新，请检查网络后重试。", error)
         }
         val update = UpdateInfo.parse(raw)
         if (!isTrustedApkUrl(update.apkUrl)) {
             throw UpdateParseException("更新 APK 来源不可信，已停止更新。")
         }
-        if (update.isNewerThan(currentVersionCode, currentVersionName)) {
+        if (update.isNewerThan(currentVersionCode)) {
             UpdateCheckResult.Available(update)
         } else {
             UpdateCheckResult.UpToDate
@@ -103,12 +104,15 @@ class UpdateChecker(
             .get()
             .build()
         try {
-            httpClient.newCall(request).execute().use { response ->
+            executeCall(httpClient.newCall(request)) { response ->
                 if (!response.isSuccessful) {
                     throw UpdateParseException("下载更新失败（HTTP ${response.code}），请稍后重试。")
                 }
                 val body = response.body ?: throw UpdateParseException("更新下载内容为空。")
                 val totalBytes = body.contentLength()
+                if (totalBytes > MAX_APK_BYTES) {
+                    throw UpdateParseException("更新包大小异常，已停止下载。")
+                }
                 val digest = MessageDigest.getInstance("SHA-256")
                 var downloaded = 0L
                 var lastProgress = 0
@@ -116,6 +120,7 @@ class UpdateChecker(
                     partial.outputStream().use { output ->
                         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                         while (true) {
+                            currentCoroutineContext().ensureActive()
                             val read = input.read(buffer)
                             if (read < 0) break
                             downloaded += read
@@ -169,21 +174,21 @@ class UpdateChecker(
             if (archiveError != null) {
                 throw UpdateParseException(archiveError)
             }
+            currentCoroutineContext().ensureActive()
             if (!partial.renameTo(target)) {
-                partial.copyTo(target, overwrite = true)
-                partial.delete()
+                throw UpdateParseException("无法保存更新包，请检查可用空间后重试。")
             }
             onProgress(100)
             target
         } catch (error: CancellationException) {
-            partial.delete()
             throw error
         } catch (error: UpdateParseException) {
-            partial.delete()
             throw error
         } catch (error: Exception) {
-            partial.delete()
+            currentCoroutineContext().ensureActive()
             throw UpdateParseException("下载更新失败，请检查网络后重试。", error)
+        } finally {
+            partial.delete()
         }
     }
 

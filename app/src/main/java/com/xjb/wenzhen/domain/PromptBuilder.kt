@@ -292,4 +292,10 @@ internal fun isScriptedOpening(index: Int, message: ChatMessage): Boolean =
  * 全部以本列表的 1-based 下标为唯一口径，避免出现“第 0 条”“两套编号对不上”。
  */
 internal fun transcriptEntries(messages: List<ChatMessage>): List<ChatMessage> =
-    messages.filterNot { it.role == MessageRole.DOCTOR && it.deliveryState != MessageDeliveryState.SENT }
+    messages.filter(::belongsToScoringTranscript)
+
+internal fun belongsToScoringTranscript(message: ChatMessage): Boolean =
+    message.role != MessageRole.DOCTOR || message.deliveryState == MessageDeliveryState.SENT
+
+internal fun isDoctorEvidence(transcriptIndex: Int, message: ChatMessage): Boolean =
+    message.role == MessageRole.DOCTOR && !isScriptedOpening(transcriptIndex, message)

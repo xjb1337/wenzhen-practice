@@ -43,6 +43,7 @@ data class ScoreResult(
     val aiCommentStatus: AiCommentStatus = AiCommentStatus.OK,
     /** 本次 AI 点评失败的原因，只用于当次界面提示，不写入 scoreJson。 */
     val aiCommentError: String? = null,
+    val diagnosisClues: List<DiagnosisClue> = emptyList(),
 ) {
     val aiCommentFailed: Boolean get() = aiCommentStatus == AiCommentStatus.FAILED
 
@@ -61,7 +62,16 @@ data class ScoreResult(
 }
 
 object ScoreParser {
-    fun parse(raw: String): ScoreResult {
+    fun parse(raw: String): ScoreResult = parse(raw, requireBreakdown = false)
+
+    /** 读取历史评分时沿用存档总分。缺失的分项不补成 0 分。 */
+    fun parseStored(raw: String, savedTotal: Int): ScoreResult? = try {
+        parse(raw, requireBreakdown = true).copy(totalScore = savedTotal)
+    } catch (_: ScoreParseException) {
+        null
+    }
+
+    private fun parse(raw: String, requireBreakdown: Boolean): ScoreResult {
         val json = extractJsonObject(raw)
         val breakdown = json.optJSONObject("breakdown")
             ?: json.optJSONObject("分项")
@@ -87,6 +97,9 @@ object ScoreParser {
             breakdown, "treatment", "treatmentPlan", "治疗", "治疗方案", "治疗评分",
         ) ?: findScore(json, "治疗评分")
 
+        if (requireBreakdown && listOf(coverage, technique, communication, diagnosis).any { it == null }) {
+            throw ScoreParseException("历史记录缺少完整评分分项。")
+        }
         val explicitTotal = findScore(json, "totalScore", "total", "总分")
         if (explicitTotal == null && listOf(coverage, technique, communication, diagnosis, treatment).all { it == null }) {
             throw ScoreParseException("评分 JSON 缺少总分和分项分数，请重试。")
@@ -125,6 +138,7 @@ object ScoreParser {
             treatmentScore = treatmentValue,
             isLegacy = legacy,
             evidence = readEvidence(json),
+            diagnosisClues = if (requireBreakdown) readDiagnosisClues(json.optJSONArray("diagnosisClues")) else emptyList(),
             aiCommentStatus = AiCommentStatus.from(json.optString("aiCommentStatus")),
         )
     }
@@ -136,7 +150,7 @@ object ScoreParser {
             put("techniqueAndOrder", score.techniqueScore)
             put("communication", score.communicationScore)
             put("diagnosisAccuracy", score.diagnosisScore)
-            put("treatment", score.treatmentScore)
+            if (!score.isLegacy) put("treatment", score.treatmentScore)
         })
         put("coveredPoints", JSONArray(score.coveredPoints))
         put("missedQuestions", JSONArray(score.missedQuestions))
@@ -145,6 +159,13 @@ object ScoreParser {
         put("correctDiagnosis", score.correctDiagnosis)
         put("diagnosisExplanation", score.diagnosisExplanation)
         put("aiCommentStatus", score.aiCommentStatus.name)
+        if (score.diagnosisClues.isNotEmpty()) {
+            put("diagnosisClues", JSONArray().apply {
+                score.diagnosisClues.forEach { clue ->
+                    put(JSONObject().put("text", clue.text).put("messageNumber", clue.messageNumber))
+                }
+            })
+        }
         put("questionEvidence", JSONArray().apply {
             score.evidence.forEach { item ->
                 put(JSONObject().apply {
@@ -154,6 +175,16 @@ object ScoreParser {
             }
         })
     }.toString()
+
+    private fun readDiagnosisClues(array: JSONArray?): List<DiagnosisClue> {
+        if (array == null) return emptyList()
+        return (0 until array.length()).asSequence().mapNotNull { index ->
+            val item = array.optJSONObject(index) ?: return@mapNotNull null
+            val text = item.optString("text").trim()
+            val number = item.optInt("messageNumber", -1)
+            if (text.isBlank() || number <= 0) null else DiagnosisClue(text, number)
+        }.distinct().take(2).toList()
+    }
 
     private fun readEvidence(json: JSONObject): List<ScoreEvidence> {
         val array = json.optJSONArray("questionEvidence")

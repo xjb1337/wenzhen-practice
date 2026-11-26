@@ -26,6 +26,7 @@ enum class ClinicalRequestType(
             "电解质",
             "血糖",
             "心肌酶",
+            "肌钙蛋白",
             "尿常规",
             "心电图",
             "胸部X线",

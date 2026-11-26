@@ -26,26 +26,24 @@ class AppContainer(
     overrideConsultationDraftRepository: ConsultationDraftRepository? = null,
 ) {
     private val appContext = context.applicationContext
-    private val database = overrideDatabase ?: AppDatabase.get(context)
-    val consultationRepository = overrideConsultationRepository ?: ConsultationRepository(database.consultationDao())
-    val consultationDraftRepository =
-        overrideConsultationDraftRepository ?: ConsultationDraftRepository(database.consultationDraftDao())
-    val savedCaseRepository = SavedCaseRepository(database.savedCaseDao())
-    val settingsRepository = overrideSettingsRepository ?: SettingsRepository(context)
-    val llmClient: LlmClient = overrideLlmClient ?: DeepSeekClient()
-    val updateChecker = UpdateChecker(appContext)
-    val currentVersionName: String
-    val currentVersionCode: Int
-
-    init {
-        currentVersionName = BuildConfig.VERSION_NAME
-        currentVersionCode = BuildConfig.VERSION_CODE
+    private val database by lazy { overrideDatabase ?: AppDatabase.get(appContext) }
+    val consultationRepository by lazy {
+        overrideConsultationRepository ?: ConsultationRepository(database.consultationDao())
     }
+    val consultationDraftRepository by lazy {
+        overrideConsultationDraftRepository ?: ConsultationDraftRepository(database.consultationDraftDao())
+    }
+    val savedCaseRepository by lazy { SavedCaseRepository(database.savedCaseDao()) }
+    val settingsRepository by lazy { overrideSettingsRepository ?: SettingsRepository(appContext) }
+    val llmClient: LlmClient by lazy { overrideLlmClient ?: DeepSeekClient() }
+    val updateChecker by lazy { UpdateChecker(appContext) }
+    val currentVersionName: String = BuildConfig.VERSION_NAME
+    val currentVersionCode: Int = BuildConfig.VERSION_CODE
 
-    private val promptBuilder = PromptBuilder()
-    val patientChatService = PatientChatService(llmClient, promptBuilder)
-    val medicalRecordService = MedicalRecordService(llmClient, promptBuilder)
-    val scoreService = ScoreService(llmClient, promptBuilder)
-    val caseGenerationService = CaseGenerationService(llmClient, promptBuilder)
-    val clinicalDataService = ClinicalDataService(llmClient, promptBuilder)
+    private val promptBuilder by lazy { PromptBuilder() }
+    val patientChatService by lazy { PatientChatService(llmClient, promptBuilder) }
+    val medicalRecordService by lazy { MedicalRecordService(llmClient, promptBuilder) }
+    val scoreService by lazy { ScoreService(llmClient, promptBuilder) }
+    val caseGenerationService by lazy { CaseGenerationService(llmClient, promptBuilder) }
+    val clinicalDataService by lazy { ClinicalDataService(llmClient, promptBuilder) }
 }

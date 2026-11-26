@@ -66,6 +66,28 @@ class StatsCalculatorTest {
         assertTrue(summary.topMissedQuestions.isEmpty())
     }
 
+    @Test
+    fun `密集趋势分段覆盖全部记录并保留每段极值与均分`() {
+        val records = List(121) { index ->
+            val score = when (index) {
+                0 -> 0
+                1 -> 100
+                120 -> 37
+                else -> 80
+            }
+            record(index.toLong(), "心内科", score, index.toLong(), emptyList())
+        }
+        val stats = StatsCalculator.calculate(records.asReversed())
+
+        assertEquals(121, stats.trend.size)
+        assertEquals(37, stats.trend.last().score)
+        assertTrue(stats.trendSegments.size <= 60)
+        assertEquals((0..120).toList(), stats.trendSegments.flatMap { it.firstIndex..it.lastIndex })
+        assertEquals(ScoreTrendSegment(0, 2, 0, 100, 60f), stats.trendSegments.first())
+        assertEquals(ScoreTrendSegment(120, 120, 37, 37, 37f), stats.trendSegments.last())
+        assertTrue(StatsCalculator.calculate(records.take(60)).trendSegments.isEmpty())
+    }
+
     private fun record(
         id: Long,
         department: String,

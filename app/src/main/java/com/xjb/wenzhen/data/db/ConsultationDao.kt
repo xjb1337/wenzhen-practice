@@ -5,11 +5,21 @@ import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.collect
 
 @Dao
 interface ConsultationDao {
     @Query("SELECT * FROM consultations ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<ConsultationEntity>>
+
+    @Query("SELECT id, caseTitle, department, patientName, totalScore, createdAt FROM consultations ORDER BY createdAt DESC")
+    fun observeHistory(): Flow<List<ConsultationListItem>>
+
+    @Query("SELECT id, department, totalScore, createdAt, scoreJson FROM consultations ORDER BY createdAt DESC")
+    fun observeScores(): Flow<List<ConsultationScoreRow>>
+
+    @Query("SELECT conversationJson FROM consultations WHERE id = :id")
+    suspend fun getConversationJson(id: Long): String?
 
     @Query("SELECT * FROM consultations WHERE id = :id LIMIT 1")
     suspend fun getById(id: Long): ConsultationEntity?
@@ -38,9 +48,9 @@ interface ConsultationDao {
      * @return 实际写入的条数
      */
     @Transaction
-    suspend fun restoreAll(records: List<ConsultationEntity>): Int {
+    suspend fun restoreAll(records: Flow<ConsultationEntity>): Int {
         var inserted = 0
-        records.forEach { record ->
+        records.collect { record ->
             if (countBySignature(record.caseJson, record.createdAt) == 0) {
                 insert(record.copy(id = 0L))
                 inserted++

@@ -12,6 +12,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.selection.toggleable
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -56,7 +61,9 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableIntStateOf
@@ -69,6 +76,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -80,6 +88,7 @@ import com.xjb.wenzhen.data.update.InstallLaunchResult
 import com.xjb.wenzhen.data.update.UpdateInstaller
 import com.xjb.wenzhen.data.update.UpdateInfo
 import com.xjb.wenzhen.ui.ConnectionTestUiState
+import com.xjb.wenzhen.ui.SettingsExit
 import com.xjb.wenzhen.ui.UpdateUiState
 import com.xjb.wenzhen.ui.components.NoticeBanner
 import com.xjb.wenzhen.ui.components.WenzhenTopBar
@@ -92,6 +101,7 @@ import com.xjb.wenzhen.ui.theme.TealSecondary
 import com.xjb.wenzhen.ui.theme.WenzhenColors
 import com.xjb.wenzhen.ui.theme.paletteFor
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     settings: AppSettings,
@@ -101,11 +111,18 @@ fun SettingsScreen(
         baseUrl: String,
         thinkingLevel: ThinkingLevel,
         generateRecord: Boolean,
+        exit: SettingsExit?,
     ) -> Unit,
-    onBack: () -> Unit,
-    offlineMode: Boolean = settings.offlineMode,
-    onOfflineModeChange: (Boolean) -> Unit = {},
+    isSaving: Boolean,
+    exitRequest: SettingsExit?,
+    onRequestExit: (SettingsExit?) -> Unit,
+    onExit: (SettingsExit) -> Unit,
     modifier: Modifier = Modifier,
+    offlineMode: Boolean = settings.offlineMode,
+    offlineModeSaving: Boolean = false,
+    onOfflineModeChange: (Boolean) -> Unit = {},
+    temporarySettings: Boolean = false,
+    onRetrySettings: () -> Unit = {},
     saveError: String? = null,
     onDismissError: () -> Unit = {},
     onTestConnection: (
@@ -136,8 +153,6 @@ fun SettingsScreen(
     var guideExpanded by rememberSaveable { mutableStateOf(initialGuideExpanded) }
     var thinkingLevel by rememberSaveable { mutableStateOf(settings.thinkingLevel) }
     var generateRecord by rememberSaveable { mutableStateOf(settings.generateRecord) }
-    var localOfflineMode by rememberSaveable { mutableStateOf(offlineMode) }
-    var showUnsavedDialog by remember { mutableStateOf(false) }
 
     fun selectedModel(): String = knownModels.getOrElse(selectedModelIndex) { AppSettings.MODEL_FLASH }
 
@@ -148,52 +163,39 @@ fun SettingsScreen(
         thinkingLevel != settings.thinkingLevel ||
         draftModel != normalizedSavedModel
 
-    fun trySaveSettings(): Boolean {
+    val canSave = !isSaving && !temporarySettings
+
+    fun save(exit: SettingsExit? = null) {
+        if (!canSave) return
         localError = null
-        onSave(
-            apiKey,
-            selectedModel(),
-            AppSettings.DEFAULT_BASE_URL,
-            thinkingLevel,
-            generateRecord,
-        )
-        return true
+        onRequestExit(null)
+        onSave(apiKey, selectedModel(), AppSettings.DEFAULT_BASE_URL, thinkingLevel, generateRecord, exit)
     }
 
     val handleBack: () -> Unit = {
-        if (hasUnsavedChanges) {
-            showUnsavedDialog = true
-        } else {
-            onBack()
-        }
+        if (!isSaving) onRequestExit(SettingsExit.Back)
     }
+    BackHandler(enabled = isSaving || hasUnsavedChanges, onBack = handleBack)
 
-    BackHandler(enabled = hasUnsavedChanges) {
-        showUnsavedDialog = true
+    LaunchedEffect(exitRequest, hasUnsavedChanges, isSaving) {
+        if (exitRequest != null && !hasUnsavedChanges && !isSaving) onExit(exitRequest)
     }
-
-    if (showUnsavedDialog) {
+    if (exitRequest != null && hasUnsavedChanges) {
         AlertDialog(
-            onDismissRequest = { showUnsavedDialog = false },
+            onDismissRequest = { onRequestExit(null) },
             title = { Text("有未保存的设置") },
             text = { Text("你修改了 AI 服务或生成选项但尚未保存，是否先保存再离开？") },
             confirmButton = {
-                Button(onClick = {
-                    showUnsavedDialog = false
-                    if (trySaveSettings()) onBack()
-                }) {
+                Button(onClick = { save(exitRequest) }, enabled = canSave) {
                     Text("保存并离开")
                 }
             },
             dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    TextButton(onClick = { showUnsavedDialog = false }) {
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    TextButton(onClick = { onRequestExit(null) }) {
                         Text("继续编辑")
                     }
-                    TextButton(onClick = {
-                        showUnsavedDialog = false
-                        onBack()
-                    }) {
+                    TextButton(onClick = { onExit(exitRequest) }) {
                         Text("放弃更改", color = MaterialTheme.colorScheme.error)
                     }
                 }
@@ -206,11 +208,15 @@ fun SettingsScreen(
         topBar = {
             WenzhenTopBar(
                 title = "设置",
-                subtitle = if (hasUnsavedChanges) "有未保存的更改" else null,
+                subtitle = when {
+                    isSaving -> "正在保存设置…"
+                    hasUnsavedChanges -> "有未保存的更改"
+                    else -> null
+                },
                 onBack = handleBack,
                 actions = {
-                    if (hasUnsavedChanges) {
-                        TextButton(onClick = { trySaveSettings() }) {
+                    if (hasUnsavedChanges && !isSaving) {
+                        TextButton(onClick = { save() }, enabled = canSave) {
                             Text("保存", fontWeight = FontWeight.SemiBold)
                         }
                     }
@@ -228,6 +234,15 @@ fun SettingsScreen(
             contentPadding = PaddingValues(start = 20.dp, end = 20.dp, top = 8.dp, bottom = 30.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
+            if (temporarySettings) {
+                item {
+                    NoticeBanner(
+                        message = "本机加密设置暂时无法读取。本次使用离线练习。",
+                        actionLabel = "重新读取",
+                        onAction = onRetrySettings,
+                    )
+                }
+            }
             item {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
@@ -280,7 +295,7 @@ fun SettingsScreen(
             item {
                 SettingsSection(title = "AI 服务") {
                     val activeSummary = when {
-                        localOfflineMode -> "当前生效：离线基础训练（不调用 AI 服务）"
+                        offlineMode -> "当前生效：离线基础训练（不调用 AI 服务）"
                         settings.apiKey.isNotBlank() -> "当前生效：${settings.model}"
                         else -> "当前生效：待填写 API Key"
                     }
@@ -290,9 +305,13 @@ fun SettingsScreen(
                         color = TealPrimary,
                     )
 
+                    if (settings.legacyEndpointNeedsKey) {
+                        NoticeBanner(message = settings.aiSetupMessage, isError = false)
+                    }
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
+                        readOnly = isSaving,
                         modifier = Modifier.fillMaxWidth().bringIntoViewOnFocus(),
                         label = { Text("API Key") },
                         placeholder = { Text("sk-…") },
@@ -347,7 +366,7 @@ fun SettingsScreen(
                             }
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        enabled = !connectionTest.isTesting,
+                        enabled = !offlineMode && !offlineModeSaving && !isSaving && !connectionTest.isTesting,
                         shape = RoundedCornerShape(14.dp),
                         contentPadding = PaddingValues(vertical = 12.dp),
                     ) {
@@ -366,17 +385,19 @@ fun SettingsScreen(
             }
 
             item {
-                SettingsSection(title = "模型") {
+                SettingsSection(title = "模型", modifier = Modifier.selectableGroup()) {
                     ModelOption(
                         title = "DeepSeek V4 Flash",
                         description = "响应更快，适合日常问诊练习",
                         selected = selectedModelIndex == 0,
+                        enabled = !isSaving,
                         onClick = { selectedModelIndex = 0 },
                     )
                     ModelOption(
                         title = "DeepSeek V4 Pro",
                         description = "推理更充分，适合复杂病例复盘",
                         selected = selectedModelIndex == 1,
+                        enabled = !isSaving,
                         onClick = { selectedModelIndex = 1 },
                     )
                 }
@@ -384,10 +405,11 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(title = "思考强度") {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         ThinkingLevel.entries.forEach { level ->
                             FilterChip(
                                 selected = thinkingLevel == level,
+                                enabled = !isSaving,
                                 onClick = { thinkingLevel = level },
                                 label = { Text(level.label) },
                             )
@@ -415,38 +437,33 @@ fun SettingsScreen(
 
             item {
                 SettingsSection(title = "练习选项") {
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("生成病历", style = MaterialTheme.typography.titleSmall)
-                            Text("结束问诊时默认生成病历", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(checked = generateRecord, onCheckedChange = { generateRecord = it })
-                    }
-                    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text("离线基础训练", style = MaterialTheme.typography.titleSmall)
-                            Text("使用内置病例练习，不调用 AI 服务", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        Switch(
-                            checked = localOfflineMode,
-                            onCheckedChange = {
-                                localOfflineMode = it
-                                onOfflineModeChange(it)
-                            },
-                        )
-                    }
+                    SettingsToggle(
+                        title = "生成病历",
+                        description = "结束问诊时默认生成病历",
+                        checked = generateRecord,
+                        onCheckedChange = { generateRecord = it },
+                        enabled = !isSaving,
+                    )
+                    SettingsToggle(
+                        title = "离线基础训练",
+                        description = if (offlineModeSaving) "正在保存练习模式…" else "使用内置病例练习，不调用 AI 服务",
+                        checked = offlineMode,
+                        onCheckedChange = onOfflineModeChange,
+                        enabled = !temporarySettings && !offlineModeSaving,
+                    )
                 }
             }
 
             item {
                 Button(
-                    onClick = { trySaveSettings() },
+                    onClick = { save() },
+                    enabled = canSave,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(54.dp),
                     shape = RoundedCornerShape(16.dp),
                 ) {
-                    Text(if (hasUnsavedChanges) "保存设置（有未保存更改）" else "保存设置", fontWeight = FontWeight.SemiBold)
+                    Text(if (isSaving) "正在保存…" else "保存设置", fontWeight = FontWeight.SemiBold)
                 }
             }
 
@@ -751,11 +768,36 @@ private fun MiniThemePreview(
 }
 
 @Composable
+private fun SettingsToggle(
+    title: String,
+    description: String,
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit,
+    enabled: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .minimumInteractiveComponentSize()
+            .toggleable(value = checked, enabled = enabled, role = Role.Switch, onValueChange = onCheckedChange),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(description, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = checked, onCheckedChange = null, enabled = enabled)
+    }
+}
+
+@Composable
 private fun SettingsSection(
     title: String,
+    modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column(modifier = modifier, verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
             text = title,
             style = MaterialTheme.typography.titleSmall,
@@ -771,12 +813,13 @@ private fun ModelOption(
     title: String,
     description: String,
     selected: Boolean,
+    enabled: Boolean,
     onClick: () -> Unit,
 ) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick),
+            .selectable(selected = selected, enabled = enabled, role = Role.RadioButton, onClick = onClick),
         shape = RoundedCornerShape(16.dp),
         color = if (selected) {
             MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f)
@@ -796,7 +839,7 @@ private fun ModelOption(
             modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RadioButton(selected = selected, onClick = onClick)
+            RadioButton(selected = selected, onClick = null, enabled = enabled)
             Column(modifier = Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall)
                 Text(

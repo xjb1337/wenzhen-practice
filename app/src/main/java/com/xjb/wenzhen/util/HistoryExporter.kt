@@ -3,28 +3,14 @@ package com.xjb.wenzhen.util
 import android.content.Context
 import android.graphics.Paint
 import android.graphics.pdf.PdfDocument
-import android.net.Uri
 import com.xjb.wenzhen.data.db.ConsultationEntity
-import org.json.JSONArray
-import org.json.JSONObject
-import java.io.ByteArrayOutputStream
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-/**
- * 历史记录导出：Markdown / JSON 备份 / PDF。备份 JSON 可再次导入恢复。
- */
+/** 问诊历史的 Markdown 和 PDF 导出。 */
 object HistoryExporter {
-    private const val FORMAT_VERSION = 1
-
-    /** 导入备份的大小上限，避免把超大文件整段读进内存。 */
-    const val MAX_IMPORT_BYTES = 5 * 1024 * 1024
-
-    /** 单次导入的记录条数上限。 */
-    const val MAX_IMPORT_RECORDS = 5_000
-
     fun toMarkdown(records: List<ConsultationEntity>): String {
         val header = "# 问诊历史记录\n\n共 ${records.size} 条，导出时间：${formatTime(System.currentTimeMillis())}\n"
         val body = records.joinToString("\n---\n") { record ->
@@ -45,97 +31,6 @@ object HistoryExporter {
         }
         return header + "\n" + body
     }
-
-    fun toJson(records: List<ConsultationEntity>): String = JSONObject().apply {
-        put("formatVersion", FORMAT_VERSION)
-        put("exportedAt", System.currentTimeMillis())
-        put("records", JSONArray().apply {
-            records.forEach { record ->
-                put(JSONObject().apply {
-                    put("caseTitle", record.caseTitle)
-                    put("department", record.department)
-                    put("difficulty", record.difficulty)
-                    put("patientName", record.patientName)
-                    put("caseJson", record.caseJson)
-                    put("conversationJson", record.conversationJson)
-                    put("medicalRecord", record.medicalRecord)
-                    put("scoreJson", record.scoreJson)
-                    put("totalScore", record.totalScore)
-                    put("initialDiagnosis", record.initialDiagnosis)
-                    put("diagnosisBasis", record.diagnosisBasis)
-                    put("createdAt", record.createdAt)
-                    put("patientPersonality", record.patientPersonality)
-                    put("encounterType", record.encounterType)
-                    put("treatmentAnswer", record.treatmentAnswer)
-                    put("recordType", record.recordType)
-                })
-            }
-        })
-    }.toString()
-
-    fun parseBackup(raw: String): List<ConsultationEntity> {
-        val root = raw.trim().let { text ->
-            val start = text.indexOf('{')
-            val end = text.lastIndexOf('}')
-            if (start >= 0 && end > start) JSONObject(text.substring(start, end + 1)) else JSONObject(text)
-        }
-        val array = root.optJSONArray("records") ?: JSONArray()
-        require(array.length() <= MAX_IMPORT_RECORDS) { "备份记录超过 $MAX_IMPORT_RECORDS 条，请拆分后再导入" }
-        return buildList {
-            for (index in 0 until array.length()) {
-                val item = array.optJSONObject(index) ?: continue
-                val title = item.optString("caseTitle").trim()
-                if (title.isEmpty()) continue
-                add(
-                    ConsultationEntity(
-                        id = 0L,
-                        caseTitle = title,
-                        department = item.optString("department"),
-                        difficulty = item.optString("difficulty"),
-                        patientName = item.optString("patientName"),
-                        caseJson = item.optString("caseJson"),
-                        conversationJson = item.optString("conversationJson"),
-                        medicalRecord = item.optString("medicalRecord"),
-                        scoreJson = item.optString("scoreJson"),
-                        totalScore = item.optInt("totalScore"),
-                        initialDiagnosis = item.optString("initialDiagnosis"),
-                        diagnosisBasis = item.optString("diagnosisBasis"),
-                        createdAt = item.optLong("createdAt", System.currentTimeMillis()),
-                        patientPersonality = item.optString("patientPersonality", "COOPERATIVE"),
-                        encounterType = item.optString("encounterType", "OUTPATIENT"),
-                        treatmentAnswer = item.optString("treatmentAnswer"),
-                        recordType = item.optString("recordType", "INPATIENT"),
-                    )
-                )
-            }
-        }
-    }
-
-    /**
-     * 从 content Uri 读取并解析备份。读取在调用方指定的 IO 线程执行，
-     * 超过 [MAX_IMPORT_BYTES] 时立即失败，不会把整个文件读入内存。
-     */
-    fun readBackup(context: Context, uri: Uri): List<ConsultationEntity> {
-        val bytes = context.contentResolver.openInputStream(uri)?.use { input ->
-            val output = ByteArrayOutputStream()
-            val buffer = ByteArray(16 * 1024)
-            var total = 0
-            while (true) {
-                val read = input.read(buffer)
-                if (read < 0) break
-                total += read
-                require(total <= MAX_IMPORT_BYTES) { "备份文件超过 5 MB，无法导入" }
-                output.write(buffer, 0, read)
-            }
-            output.toByteArray()
-        } ?: error("无法读取文件")
-        return parseBackup(String(bytes, Charsets.UTF_8))
-    }
-
-    fun writeJson(context: Context, records: List<ConsultationEntity>): File =
-        File(exportDir(context), "wenzhen-history-${timestamp()}.json").apply {
-            writeText(toJson(records), Charsets.UTF_8)
-        }
 
     fun writeMarkdown(context: Context, records: List<ConsultationEntity>): File =
         File(exportDir(context), "wenzhen-history-${timestamp()}.md").apply {

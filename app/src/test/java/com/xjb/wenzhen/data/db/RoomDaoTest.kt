@@ -3,6 +3,9 @@ package com.xjb.wenzhen.data.db
 import android.content.Context
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
+import com.xjb.wenzhen.util.HistoryBackup
+import java.io.StringReader
+import java.io.StringWriter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
@@ -76,6 +79,55 @@ class RoomDaoTest {
         val updated = dao.observeAll().first()
         assertEquals("old", updated.first().id)
         assertTrue(updated.first().favorite)
+    }
+
+    @Test
+    fun `大于旧大小和条数上限的备份可完整往返并安全重试`() = runBlocking {
+        val payload = "合成练习对话".repeat(180)
+        val records = List(5_001) { index ->
+            consultation("第 ${index + 1} 条", createdAt = 1_790_000_000_000L + index)
+                .copy(conversationJson = "[{\"content\":\"$payload\"}]")
+        }
+        val writer = StringWriter()
+        HistoryBackup.writeRecords(writer, records)
+        val backup = writer.toString()
+        assertTrue(backup.toByteArray(Charsets.UTF_8).size > 5 * 1024 * 1024)
+        val dao = db.consultationDao()
+
+        assertEquals(records.size, dao.restoreAll(HistoryBackup.readRecords { StringReader(backup) }))
+        val restored = dao.observeAll().first().asReversed().map { it.copy(id = 0) }
+        assertEquals(records, restored)
+        assertEquals(0, dao.restoreAll(HistoryBackup.readRecords { StringReader(backup) }))
+        assertEquals(records.size, dao.observeAll().first().size)
+    }
+
+    @Test
+    fun `文件末尾损坏时回滚所有已读取的记录并保留原历史`() = runBlocking {
+        val dao = db.consultationDao()
+        val existingId = dao.insert(consultation("原有记录", createdAt = 1L))
+        val writer = StringWriter()
+        HistoryBackup.writeRecords(writer, listOf(consultation("不得残留的记录", createdAt = 2L)))
+        val truncated = writer.toString().dropLast(1)
+
+        val result = runCatching { dao.restoreAll(HistoryBackup.readRecords { StringReader(truncated) }) }
+
+        assertTrue(result.isFailure)
+        assertEquals(listOf(existingId), dao.observeAll().first().map { it.id })
+    }
+
+    @Test
+    fun `旧版备份可读取且保留缺省的病例类型和性格`() = runBlocking {
+        val legacy = """{"formatVersion":1,"exportedAt":1700000000000,"records":[{"caseTitle":"旧备份","createdAt":1700000000001,"totalScore":86}]}"""
+        val dao = db.consultationDao()
+
+        assertEquals(1, dao.restoreAll(HistoryBackup.readRecords { StringReader(legacy) }))
+
+        val record = dao.observeAll().first().single()
+        assertEquals(1_700_000_000_001L, record.createdAt)
+        assertEquals(86, record.totalScore)
+        assertEquals("COOPERATIVE", record.patientPersonality)
+        assertEquals("OUTPATIENT", record.encounterType)
+        assertEquals("INPATIENT", record.recordType)
     }
 
     @Test

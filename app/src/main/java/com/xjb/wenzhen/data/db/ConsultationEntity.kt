@@ -30,3 +30,20 @@ data class ConsultationEntity(
     @ColumnInfo(defaultValue = "'INPATIENT'")
     val recordType: String = "INPATIENT",
 )
+
+data class ConsultationListItem(
+    val id: Long,
+    val caseTitle: String,
+    val department: String,
+    val patientName: String,
+    val totalScore: Int,
+    val createdAt: Long,
+)
+
+data class ConsultationScoreRow(
+    val id: Long,
+    val department: String,
+    val totalScore: Int,
+    val createdAt: Long,
+    val scoreJson: String,
+)
